@@ -2,7 +2,14 @@ import { query } from '@/lib/db.js';
 export { validateMemberFields, getMissingRequiredMemberFields } from '@/lib/member-field-validation.js';
 
 export async function ensureMemberConfigurationDefaults() {
-  await query('SELECT public.seed_member_configuration_defaults(public.current_organization_id())');
+  try {
+    await query('SELECT public.seed_member_configuration_defaults(public.current_organization_id())');
+  } catch (error) {
+    if (error.code === '42883') {
+      throw new Error('Database migration 957 is not applied. Run `npm run migrate:member-config` before using member and group registration.');
+    }
+    throw error;
+  }
 }
 
 export async function getMemberFields() {
