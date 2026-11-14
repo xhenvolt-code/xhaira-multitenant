@@ -8,7 +8,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
@@ -57,7 +57,7 @@ export async function GET(request) {
     ]);
 
     const total = parseInt(countResult.rows[0]?.total || 0);
-    const fieldConfigs = await getMemberFields();
+    const fieldConfigs = await getMemberFields(perm.auth.organizationId);
     const members = dataResult.rows.map((member) => {
       const missingRequiredFields = getMissingRequiredMemberFields(fieldConfigs, member);
       const missingDocuments = member.missing_required_documents || [];
@@ -108,7 +108,7 @@ export async function POST(request) {
     if (!['individual', 'group'].includes(member_kind)) {
       return NextResponse.json({ success: false, error: 'Invalid member kind' }, { status: 400 });
     }
-    const configuredFields = await getMemberFields();
+    const configuredFields = await getMemberFields(perm.auth.organizationId);
     const validation = validateMemberFields(configuredFields, { ...body, full_name: resolvedFullName, custom_fields });
     if (validation.error) return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
 

@@ -7,7 +7,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const [groups, policies] = await Promise.all([
       query(`SELECT g.id, COALESCE(m.full_name, g.group_name) AS full_name, g.group_member_id,
                     COUNT(link.member_id)::int AS member_count
@@ -30,7 +30,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'members.create');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const body = await request.json();
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) return NextResponse.json({ success: false, error: 'Group name is required' }, { status: 400 });

@@ -9,7 +9,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const result = await query('SELECT * FROM member_document_type_configs ORDER BY sort_order, label');
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {
@@ -22,7 +22,7 @@ export async function PUT(request) {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
     if (perm.auth?.role !== 'superadmin') return NextResponse.json({ success: false, error: 'Only the organization administrator can change document settings' }, { status: 403 });
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const { updates } = await request.json();
     if (!Array.isArray(updates)) return NextResponse.json({ success: false, error: 'updates array required' }, { status: 400 });
     for (const update of updates) {

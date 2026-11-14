@@ -8,7 +8,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category');
@@ -36,7 +36,7 @@ export async function POST(request) {
     if (perm.auth?.role !== 'superadmin') {
       return NextResponse.json({ success: false, error: 'Only the organization administrator can change SACCO settings' }, { status: 403 });
     }
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const { auth } = perm;
 
     const body = await request.json();

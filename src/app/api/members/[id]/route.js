@@ -29,7 +29,7 @@ export async function GET(request, { params }) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
 
-    const fields = await getMemberFields();
+    const fields = await getMemberFields(perm.auth.organizationId);
     const missingRequiredFields = getMissingRequiredMemberFields(fields, memberResult.rows[0]);
     const requiredDocuments = await query(`SELECT dc.label FROM member_document_type_configs dc
       WHERE dc.is_enabled AND dc.is_required AND NOT EXISTS
@@ -67,7 +67,7 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
     const oldData = current.rows[0];
-    const configuredFields = await getMemberFields();
+    const configuredFields = await getMemberFields(perm.auth.organizationId);
     const suppliedFields = Object.fromEntries(configuredFields
       .filter((field) => Object.hasOwn(body, field.field_name))
       .filter((field) => !(field.is_required && !body[field.field_name] &&

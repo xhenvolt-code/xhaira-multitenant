@@ -30,7 +30,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const result = await query(
       `SELECT * FROM member_field_configs ORDER BY section, sort_order, label`
@@ -49,7 +49,7 @@ export async function PUT(request) {
     if (perm.auth?.role !== 'superadmin') {
       return NextResponse.json({ success: false, error: 'Only the organization administrator can change member fields' }, { status: 403 });
     }
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const body = await request.json();
     const { updates } = body; // Array of { field_name, is_active, is_required }

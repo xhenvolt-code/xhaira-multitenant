@@ -40,9 +40,15 @@ export default function MemberFieldsPage() {
   useEffect(() => { fetchFields(); }, []);
 
   const toggleField = (fieldName, key) => {
-    setFields(prev => prev.map(f =>
-      f.field_name === fieldName ? { ...f, [key]: !f[key] } : f
-    ));
+    setFields(prev => prev.map(f => {
+      if (f.field_name !== fieldName) return f;
+      const nextValue = !f[key];
+      return {
+        ...f,
+        [key]: nextValue,
+        ...(key === 'is_active' && !nextValue ? { is_required: false } : {}),
+      };
+    }));
     setDirty(true);
   };
 

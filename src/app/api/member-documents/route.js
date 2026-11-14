@@ -37,7 +37,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults();
+    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const form = await request.formData();
     const file = form.get('file');
     const memberId = form.get('member_id');
