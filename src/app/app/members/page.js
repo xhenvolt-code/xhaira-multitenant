@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Users, Search, UserCheck, UserX, Phone, Mail, CreditCard, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { formatCurrency as fmtCurrency } from '@/lib/format-currency';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
 
