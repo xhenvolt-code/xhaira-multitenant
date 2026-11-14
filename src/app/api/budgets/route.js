@@ -9,9 +9,25 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'budgets', 'view');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
-    const result = await query(`SELECT * FROM v_budget_utilization ORDER BY start_date DESC`);
+    const result = await query(
+      `SELECT b.*,
+              b.start_date AS period_start,
+              b.end_date AS period_end,
+              COALESCE(SUM(e.amount) FILTER (WHERE e.status NOT IN ('void', 'rejected')), 0) AS spent,
+              COUNT(e.id) FILTER (WHERE e.status NOT IN ('void', 'rejected'))::int AS expense_count
+       FROM budgets b
+       LEFT JOIN expenses e
+         ON e.budget_id = b.id
+        AND e.organization_id = b.organization_id
+        AND e.expense_date BETWEEN b.start_date AND b.end_date
+       WHERE b.organization_id = $1
+       GROUP BY b.id
+       ORDER BY b.start_date DESC`,
+      [auth.organizationId]
+    );
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {
+    console.error('[Budgets] GET error:', error.message);
     return NextResponse.json({ success: false, error: 'Failed to fetch budgets' }, { status: 500 });
   }
 }
@@ -22,14 +38,14 @@ export async function POST(request) {
     const auth = await verifyAuth(request);
     if (!auth) return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
     const body = await request.json();
-    const { name, category, amount, currency, period, start_date, end_date, alert_threshold, notes } = body;
-    if (!name || !category || !amount || !period || !start_date || !end_date) {
-      return NextResponse.json({ success: false, error: 'name, category, amount, period, start_date, and end_date are required' }, { status: 400 });
+    const { name, amount, currency, period, start_date, end_date, alert_threshold, notes } = body;
+    if (!name || amount == null || Number(amount) <= 0 || !period || !start_date || !end_date) {
+      return NextResponse.json({ success: false, error: 'name, positive amount, period, start_date, and end_date are required' }, { status: 400 });
     }
     const result = await query(
-      `INSERT INTO budgets (name, category, amount, currency, period, start_date, end_date, alert_threshold, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [name, category, amount, currency||'UGX', period, start_date, end_date, alert_threshold||80, notes||null, auth.userId]
+      `INSERT INTO budgets (name, category, amount, currency, period, start_date, end_date, alert_threshold, notes, created_by, organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [name, category || 'other', amount, currency || 'UGX', period, start_date, end_date, alert_threshold ?? 80, notes || null, auth.userId, auth.organizationId]
     );
     return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
   } catch (error) {

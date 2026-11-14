@@ -16,8 +16,10 @@ export async function GET(request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
-    const params = [];
+    // RLS is the primary tenant boundary; keep the organization predicate in
+    // the query as defense in depth and to make the data scope explicit.
+    let where = 'WHERE l.organization_id = $1';
+    const params = [perm.auth.organizationId];
 
     if (status) {
       params.push(status);
@@ -38,10 +40,10 @@ export async function GET(request) {
            ma.account_number as member_account_number,
            u.email as approved_by_email
          FROM loans l
-         JOIN members m ON m.id = l.member_id
-         LEFT JOIN products p ON p.id = l.product_id
-         LEFT JOIN member_accounts ma ON ma.id = l.member_account_id
-         LEFT JOIN users u ON u.id = l.approved_by
+         JOIN members m ON m.id = l.member_id AND m.organization_id = l.organization_id
+         LEFT JOIN products p ON p.id = l.product_id AND p.organization_id = l.organization_id
+         LEFT JOIN member_accounts ma ON ma.id = l.member_account_id AND ma.organization_id = l.organization_id
+         LEFT JOIN users u ON u.id = l.approved_by AND u.organization_id = l.organization_id
          ${where}
          ORDER BY l.created_at DESC
          LIMIT $${params.length - 1} OFFSET $${params.length}`,

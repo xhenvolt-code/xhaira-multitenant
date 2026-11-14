@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/current-user';
 import { query } from '@/lib/db';
 import { verifyAuth } from '@/lib/auth-utils.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function POST(request) {
   try {
@@ -41,7 +42,7 @@ export async function POST(request) {
     }
 
     try {
-      await query(
+      await runWithOrganizationContext(auth.organizationId, () => query(
         `INSERT INTO user_presence (user_id, last_ping, last_seen, status, is_online, current_route, current_page_title, device_info)
          VALUES ($1, NOW(), NOW(), 'online', true, $2, $3, $4)
          ON CONFLICT (user_id) DO UPDATE
@@ -52,9 +53,10 @@ export async function POST(request) {
              current_route      = COALESCE($2, user_presence.current_route),
              current_page_title = COALESCE($3, user_presence.current_page_title),
              device_info        = COALESCE($4, user_presence.device_info),
+             organization_id    = EXCLUDED.organization_id,
              updated_at         = NOW()`,
         [user.id, route, page_title, device_info]
-      );
+      ));
 
       return NextResponse.json({ ok: true, tracked: true, status: 'online' });
     } catch (err) {

@@ -77,8 +77,11 @@ export async function getSession(sessionId) {
       return null;
     }
 
-    // Update last activity in the background
-    updateSessionActivity(sessionId).catch(() => {});
+    // Carry the organization from the validated session into background work.
+    // Async request context can be lost when this promise outlives the caller.
+    runWithOrganizationContext(row.organizationId, () =>
+      updateSessionActivity(sessionId, row.organizationId)
+    ).catch(() => {});
 
     return {
       id: row.id,
@@ -106,20 +109,22 @@ export async function getSession(sessionId) {
  * @param {string} sessionId - Session ID
  * @returns {Promise<void>}
  */
-export async function updateSessionActivity(sessionId) {
+export async function updateSessionActivity(sessionId, organizationId) {
   try {
-    const sessionResult = await query(
-      `UPDATE sessions 
-       SET last_activity = CURRENT_TIMESTAMP
-       WHERE id = $1
-       RETURNING user_id`,
-      [sessionId]
-    );
+    await runWithOrganizationContext(organizationId, async () => {
+      const sessionResult = await query(
+        `UPDATE sessions
+         SET last_activity = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING user_id`,
+        [sessionId]
+      );
 
-    // Also update user's last_seen timestamp
-    if (sessionResult.rows[0]?.user_id) {
-      await updateUserLastSeen(sessionResult.rows[0].user_id);
-    }
+      // Also update user's last_seen timestamp
+      if (sessionResult.rows[0]?.user_id) {
+        await updateUserLastSeen(sessionResult.rows[0].user_id, organizationId);
+      }
+    });
   } catch (error) {
     console.error('Error updating session activity:', error.message);
   }
@@ -130,26 +135,29 @@ export async function updateSessionActivity(sessionId) {
  * @param {string} userId - User ID
  * @returns {Promise<void>}
  */
-export async function updateUserLastSeen(userId) {
+export async function updateUserLastSeen(userId, organizationId) {
   try {
-    await query(
-      `UPDATE users
-       SET last_seen    = CURRENT_TIMESTAMP,
-           last_seen_at = CURRENT_TIMESTAMP,
-           is_online    = true
-       WHERE id = $1`,
-      [userId]
-    );
-    // Also keep user_presence table in sync
-    await query(
-      `INSERT INTO user_presence (user_id, last_ping, last_seen, status, is_online, updated_at)
-       VALUES ($1, NOW(), NOW(), 'online', true, NOW())
+    if (!organizationId) throw new Error('Organization context is required to update user presence');
+    await runWithOrganizationContext(organizationId, () => query(
+      `WITH updated_user AS (
+         UPDATE users
+         SET last_seen = CURRENT_TIMESTAMP,
+             last_seen_at = CURRENT_TIMESTAMP,
+             is_online = true
+         WHERE id = $1 AND organization_id = $2
+         RETURNING id
+       )
+       INSERT INTO user_presence (user_id, last_ping, last_seen, status, is_online, updated_at)
+       SELECT id, NOW(), NOW(), 'online', true, NOW() FROM updated_user
        ON CONFLICT (user_id) DO UPDATE
-       SET last_ping  = NOW(),
-           last_seen  = NOW(),
+       SET last_ping = NOW(),
+           last_seen = NOW(),
+           status = 'online',
+           is_online = true,
+           organization_id = EXCLUDED.organization_id,
            updated_at = NOW()`,
-      [userId]
-    );
+      [userId, organizationId]
+    ));
   } catch (error) {
     if (error.code === '42703') {
       // Column does not exist error - migration not run yet

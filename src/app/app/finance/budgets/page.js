@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { PiggyBank, Plus, X, Edit, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
@@ -18,9 +18,11 @@ export default function BudgetsPage() {
   const [saving, setSaving] = useState(false);
   const toast = useToast();
 
-  const fetchBudgets = async () => {
+  const fetchBudgets = useCallback(async () => {
     try { const res = await fetchWithAuth('/api/budgets'); const j = await res.json(); if (j.success) setBudgets(j.data); } catch (err) { console.error(err); } finally { setLoading(false); }
-  };
+  }, []);
+
+  useEffect(() => { fetchBudgets(); }, [fetchBudgets]);
 
   const submit = async (e) => {
     e.preventDefault(); setSaving(true);

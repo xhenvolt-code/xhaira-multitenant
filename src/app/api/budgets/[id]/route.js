@@ -9,10 +9,28 @@ export async function GET(request, { params }) {
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
     const { id } = await params;
-    const budget = await query(`SELECT * FROM v_budget_utilization WHERE budget_id = $1`, [id]);
+    const budget = await query(
+      `SELECT b.*,
+              b.start_date AS period_start,
+              b.end_date AS period_end,
+              COALESCE(SUM(e.amount) FILTER (WHERE e.status NOT IN ('void', 'rejected')), 0) AS spent,
+              COUNT(e.id) FILTER (WHERE e.status NOT IN ('void', 'rejected'))::int AS expense_count
+       FROM budgets b
+       LEFT JOIN expenses e
+         ON e.budget_id = b.id
+        AND e.organization_id = b.organization_id
+        AND e.expense_date BETWEEN b.start_date AND b.end_date
+       WHERE b.id = $1 AND b.organization_id = $2
+       GROUP BY b.id`,
+      [id, auth.organizationId]
+    );
     if (!budget.rows[0]) return NextResponse.json({ success: false, error: 'Budget not found' }, { status: 404 });
     const expenses = await query(
-      `SELECT e.*, a.name as account_name FROM expenses e JOIN accounts a ON e.account_id = a.id WHERE e.budget_id = $1 ORDER BY e.expense_date DESC`, [id]
+      `SELECT e.*, a.name as account_name
+       FROM expenses e
+       JOIN accounts a ON e.account_id = a.id AND a.organization_id = e.organization_id
+       WHERE e.budget_id = $1 AND e.organization_id = $2
+       ORDER BY e.expense_date DESC`, [id, auth.organizationId]
     );
     return NextResponse.json({ success: true, data: { ...budget.rows[0], expenses: expenses.rows } });
   } catch (error) {
@@ -33,7 +51,8 @@ export async function PUT(request, { params }) {
     fields.forEach(f => { if (body[f] !== undefined) { values.push(body[f]); updates.push(`${f} = $${values.length}`); } });
     if (updates.length === 0) return NextResponse.json({ success: false, error: 'No fields to update' }, { status: 400 });
     values.push(id);
-    const result = await query(`UPDATE budgets SET ${updates.join(', ')} WHERE id = $${values.length} RETURNING *`, values);
+    values.push(auth.organizationId);
+    const result = await query(`UPDATE budgets SET ${updates.join(', ')} WHERE id = $${values.length - 1} AND organization_id = $${values.length} RETURNING *`, values);
     if (!result.rows[0]) return NextResponse.json({ success: false, error: 'Budget not found' }, { status: 404 });
     return NextResponse.json({ success: true, data: result.rows[0] });
   } catch (error) {
@@ -48,8 +67,8 @@ export async function DELETE(request, { params }) {
     const { auth } = perm;
     const { id } = await params;
     // Unlink expenses from this budget first
-    await query(`UPDATE expenses SET budget_id = NULL WHERE budget_id = $1`, [id]);
-    const result = await query(`DELETE FROM budgets WHERE id = $1 RETURNING id`, [id]);
+    await query(`UPDATE expenses SET budget_id = NULL WHERE budget_id = $1 AND organization_id = $2`, [id, auth.organizationId]);
+    const result = await query(`DELETE FROM budgets WHERE id = $1 AND organization_id = $2 RETURNING id`, [id, auth.organizationId]);
     if (!result.rows[0]) return NextResponse.json({ success: false, error: 'Budget not found' }, { status: 404 });
     return NextResponse.json({ success: true, message: 'Budget deleted' });
   } catch (error) {
