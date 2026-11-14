@@ -80,6 +80,7 @@ export const menuItems = [
     module: 'members',
     submenu: [
       { label: 'All Members',       href: '/app/members',             description: 'SACCO membership directory',         permission: 'members.view' },
+      { label: 'Groups',            href: '/app/groups',              description: 'Organization groups',                 permission: 'members.view', groupsOnly: true },
       { label: 'Member Accounts',   href: '/app/members?tab=accounts', description: 'Savings, loans & investment accounts', permission: 'members.view' },
     ],
   },
@@ -232,6 +233,7 @@ export const menuItems = [
       { label: 'Active Sessions',     href: '/app/settings/sessions',         icon: Shield,  description: 'Manage logged-in devices' },
       { label: 'SACCO Configuration', href: '/app/settings/configurations',   description: 'System-wide SACCO toggles & rules',  permission: 'finance.manage' },
       { label: 'Member Fields',       href: '/app/settings/member-fields',    description: 'Configure member profile fields',    permission: 'members.view' },
+      { label: 'Member Documents',    href: '/app/settings/member-documents', description: 'Configure private member documents', permission: 'members.view' },
     ],
   },
 ];

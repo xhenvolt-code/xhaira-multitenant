@@ -74,19 +74,31 @@ export default function Sidebar() {
     'DRAIS Control': false,
   });
   const [user, setUser] = useState(null);
+  const [groupRequirement, setGroupRequirement] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const quickAddRef = useRef(null);
   const { user: permUser, hasPermission, hasModuleAccess, hasAnyPermission, hierarchyLevel, loading: permLoading } = usePermissions();
 
+  useEffect(() => {
+    if (!permUser) return;
+    fetch('/api/groups').then((response) => response.json()).then((result) => {
+      if (result.success) setGroupRequirement(result.policy?.['groups.requirement'] ?? 'optional');
+    }).catch(() => {});
+  }, [permUser]);
+
   // Filter menu items based on user permissions
   const displayMenuItems = useMemo(() => {
+    const configFiltered = configMenuItems.map((item) => item.submenu ? {
+      ...item,
+      submenu: item.submenu.filter((sub) => !(sub.groupsOnly && groupRequirement === 'disabled')),
+    } : item);
     // While loading or no user, show nothing with permission gates - show all
-    if (permLoading || !permUser) return configMenuItems;
-    // Superadmins see everything
-    if (permUser.is_superadmin) return configMenuItems;
+    if (permLoading || !permUser) return configFiltered;
+    // Superadmins see everything allowed by their organization's configuration.
+    if (permUser.is_superadmin) return configFiltered;
 
-    return configMenuItems.reduce((acc, item) => {
+    return configFiltered.reduce((acc, item) => {
       // Check hierarchy minimum if set (e.g., Admin requires level ≤ 3)
       if (item.minHierarchy && hierarchyLevel > item.minHierarchy) return acc;
 
@@ -107,7 +119,7 @@ export default function Sidebar() {
       }
       return acc;
     }, []);
-  }, [permUser, permLoading, hasPermission, hasModuleAccess, hierarchyLevel]);
+  }, [permUser, permLoading, hasPermission, hasModuleAccess, hierarchyLevel, groupRequirement]);
 
   // Close quick-add dropdown on outside click or Escape
   useEffect(() => {

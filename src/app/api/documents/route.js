@@ -45,6 +45,9 @@ export async function POST(request) {
     const body = await request.json();
     const { title, category, entity_type, entity_id, file_url, file_name, description, tags } = body;
     if (!title) return NextResponse.json({ success: false, error: 'title required' }, { status: 400 });
+    if (typeof entity_type === 'string' && /(member|national[_-]?id|member[_-]?document)/i.test(entity_type)) {
+      return NextResponse.json({ success: false, error: 'Member identity documents must use the private member document endpoint' }, { status: 400 });
+    }
 
     const result = await query(
       `INSERT INTO documents (title, category, entity_type, entity_id, file_url, file_name, uploaded_by, description, tags)

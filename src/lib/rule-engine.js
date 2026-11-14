@@ -167,10 +167,24 @@ export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loa
   }
 
   // Must be active member
-  const member = await pool.query(`SELECT id, status, created_at FROM members WHERE id = $1`, [guarantorMemberId]);
+  const member = await pool.query(`SELECT id, status, created_at, member_kind FROM members WHERE id = $1`, [guarantorMemberId]);
   if (member.rows.length === 0) return { valid: false, issues: ['Guarantor not a registered member'] };
   if (member.rows[0].status !== 'active') {
     issues.push('Guarantor is not an active member');
+  }
+  if (member.rows[0].member_kind === 'group') {
+    const policy = await pool.query(`SELECT config_key, config_value FROM sacco_configurations
+      WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+    const values = Object.fromEntries(policy.rows.map((row) => [row.config_key, row.config_value]));
+    if (values['groups.requirement'] === 'disabled' || values['groups.nature'] === 'sub_organization') {
+      issues.push('Group entities cannot guarantee loans under this organization configuration');
+    }
+  } else {
+    const groupRequirement = await pool.query(`SELECT config_value FROM sacco_configurations WHERE config_key = 'groups.requirement'`);
+    if (groupRequirement.rows[0]?.config_value === 'required') {
+      const membership = await pool.query('SELECT 1 FROM member_group_links WHERE member_id = $1 LIMIT 1', [guarantorMemberId]);
+      if (!membership.rows[0]) issues.push('Guarantor must belong to a group under this organization configuration');
+    }
   }
 
   // Min membership months

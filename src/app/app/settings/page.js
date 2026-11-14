@@ -39,6 +39,9 @@ export default function SettingsPage() {
         {[
           { href: '/app/settings/financial', icon: DollarSign, label: 'Financial', desc: 'Currency & formatting' },
           { href: '/app/settings/appearance', icon: Palette, label: 'Appearance', desc: 'Theme & colors' },
+          { href: '/app/settings/member-fields', icon: User, label: 'Member fields', desc: 'Configure collected member information' },
+          { href: '/app/settings/member-documents', icon: Lock, label: 'Member documents', desc: 'Configure private document collection' },
+          { href: '/app/settings/configurations', icon: Save, label: 'SACCO policies', desc: 'Groups, accounts, and organization policies' },
         ].map(item => (
           <Link key={item.href} href={item.href} className="flex items-center justify-between p-4 bg-card border border-border rounded-xl hover:bg-muted/50 transition group">
             <div className="flex items-center gap-3">

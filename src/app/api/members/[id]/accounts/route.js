@@ -51,12 +51,20 @@ export async function POST(request, { params }) {
     }
 
     // Verify member exists and is active
-    const member = await query(`SELECT id, full_name, status FROM members WHERE id = $1`, [id]);
+    const member = await query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1`, [id]);
     if (member.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
     if (member.rows[0].status !== 'active') {
       return NextResponse.json({ success: false, error: 'Cannot open account for inactive member' }, { status: 400 });
+    }
+    if (member.rows[0].member_kind === 'group') {
+      const groupPolicy = await query(`SELECT config_key, config_value FROM sacco_configurations
+        WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+      const policies = Object.fromEntries(groupPolicy.rows.map((row) => [row.config_key, row.config_value]));
+      if (policies['groups.requirement'] === 'disabled' || policies['groups.nature'] === 'sub_organization') {
+        return NextResponse.json({ success: false, error: 'Group saving and borrowing are disabled by organization policy' }, { status: 400 });
+      }
     }
 
     // Resolve account_type_id if not provided

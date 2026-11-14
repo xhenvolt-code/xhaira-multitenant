@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Save, RotateCcw, ArrowLeft } from 'lucide-react';
+import { Save, RotateCcw, ArrowLeft, Plus } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
@@ -22,6 +22,8 @@ export default function MemberFieldsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [newField, setNewField] = useState({ field_name: '', label: '', field_type: 'text', section: 'other', options: [] });
+  const [addingField, setAddingField] = useState(false);
 
   const fetchFields = async () => {
     try {
@@ -52,6 +54,11 @@ export default function MemberFieldsPage() {
         is_active: f.is_active,
         is_required: f.is_required,
         label: f.label,
+        field_type: f.field_type,
+        section: f.section,
+        sort_order: f.sort_order,
+        options: f.options,
+        validation_rules: f.validation_rules || {},
       }));
       const res = await fetchWithAuth('/api/member-field-configs', {
         method: 'PUT',
@@ -75,6 +82,27 @@ export default function MemberFieldsPage() {
   const handleReset = () => {
     fetchFields();
     setDirty(false);
+  };
+
+  const handleAddField = async () => {
+    const fieldName = newField.field_name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!fieldName || !newField.label.trim()) return toast.error('Enter a field name and label');
+    if (newField.field_type === 'select' && newField.options.length === 0) return toast.error('Add at least one choice for a select field');
+    setAddingField(true);
+    try {
+      const response = await fetchWithAuth('/api/member-field-configs', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates: [{ ...newField, field_name: fieldName,
+          options: newField.field_type === 'select' ? newField.options : null,
+          is_active: true, is_required: false }] }),
+      });
+      const result = await response.json();
+      if (!result.success) return toast.error(result.error || 'Could not add field');
+      setFields(result.data || []);
+      setNewField({ field_name: '', label: '', field_type: 'text', section: 'other', options: [] });
+      toast.success('Custom member field added');
+    } catch { toast.error('Network error'); }
+    finally { setAddingField(false); }
   };
 
   // Group fields by section
@@ -128,6 +156,23 @@ export default function MemberFieldsPage() {
         </div>
       )}
 
+      <section className="bg-card border border-border rounded-xl p-5 space-y-3">
+        <h2 className="font-semibold">Add a tenant-specific field</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <input value={newField.label} onChange={(event) => setNewField((prev) => ({ ...prev, label: event.target.value, field_name: event.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_') }))}
+            placeholder="Label" className="px-3 py-2 border border-border rounded-lg bg-background text-sm" />
+          <select value={newField.section} onChange={(event) => setNewField((prev) => ({ ...prev, section: event.target.value }))} className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
+            {Object.entries(SECTION_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select value={newField.field_type} onChange={(event) => setNewField((prev) => ({ ...prev, field_type: event.target.value }))} className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
+            {['text', 'email', 'phone', 'date', 'select', 'textarea', 'number'].map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+          {newField.field_type === 'select' && <input value={newField.options.join(',')} onChange={(event) => setNewField((prev) => ({ ...prev, options: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) }))}
+            placeholder="Comma-separated options" className="px-3 py-2 border border-border rounded-lg bg-background text-sm" />}
+          <button onClick={handleAddField} disabled={addingField} className="flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"><Plus className="w-4 h-4" /> Add field</button>
+        </div>
+      </section>
+
       <div className="space-y-6">
         {sectionOrder.map(section => {
           const sectionFields = grouped[section];
@@ -140,9 +185,21 @@ export default function MemberFieldsPage() {
               <div className="divide-y divide-border">
                 {sectionFields.map(field => (
                   <div key={field.field_name} className="flex items-center justify-between px-5 py-3.5">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-foreground">{field.label}</div>
+                    <div className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input value={field.label} onChange={(event) => { setFields((prev) => prev.map((item) => item.field_name === field.field_name ? { ...item, label: event.target.value } : item)); setDirty(true); }}
+                        className="px-2 py-1 border border-border rounded bg-background text-sm" aria-label={`Label for ${field.field_name}`} />
                       <div className="text-xs text-muted-foreground font-mono mt-0.5">{field.field_name}</div>
+                      <select value={field.field_type} onChange={(event) => { setFields((prev) => prev.map((item) => item.field_name === field.field_name ? { ...item, field_type: event.target.value } : item)); setDirty(true); }} className="px-2 py-1 border border-border rounded bg-background text-xs">
+                        {['text', 'email', 'phone', 'date', 'select', 'textarea', 'number'].map((type) => <option key={type} value={type}>{type}</option>)}
+                      </select>
+                      <input type="number" value={field.sort_order} onChange={(event) => { setFields((prev) => prev.map((item) => item.field_name === field.field_name ? { ...item, sort_order: Number(event.target.value) } : item)); setDirty(true); }}
+                        aria-label={`Order for ${field.field_name}`} className="px-2 py-1 border border-border rounded bg-background text-xs" />
+                      {field.field_type === 'select' && <input value={(Array.isArray(field.options) ? field.options : []).map((item) => typeof item === 'object' ? item.value : item).join(',')}
+                        onChange={(event) => { const options = event.target.value.split(',').map((item) => item.trim()).filter(Boolean); setFields((prev) => prev.map((item) => item.field_name === field.field_name ? { ...item, options } : item)); setDirty(true); }}
+                        placeholder="Comma-separated options" className="sm:col-span-2 px-2 py-1 border border-border rounded bg-background text-xs" />}
+                      <input value={JSON.stringify(field.validation_rules || {})} onChange={(event) => {
+                        try { const validation_rules = JSON.parse(event.target.value); setFields((prev) => prev.map((item) => item.field_name === field.field_name ? { ...item, validation_rules } : item)); setDirty(true); } catch {}
+                      }} aria-label={`Validation rules JSON for ${field.field_name}`} placeholder="Validation rules JSON" className="sm:col-span-2 px-2 py-1 border border-border rounded bg-background text-xs font-mono" />
                     </div>
                     <div className="flex items-center gap-4 ml-4">
                       {/* Active toggle */}

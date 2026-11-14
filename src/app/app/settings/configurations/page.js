@@ -17,6 +17,11 @@ const CATEGORY_LABELS = {
 };
 
 const CATEGORY_ORDER = ['general', 'members', 'accounts', 'loans', 'transfers', 'ui', 'notifications'];
+const POLICY_OPTIONS = {
+  'groups.requirement': [['required', 'Members must belong to a group'], ['optional', 'Group membership is optional'], ['disabled', 'Groups are disabled']],
+  'groups.nature': [['member_type', 'Groups can borrow and save'], ['sub_organization', 'Groups contain individual members'], ['both', 'Both group models']],
+  'groups.cardinality': [['one', 'One group per member'], ['many', 'Multiple groups per member']],
+};
 
 export default function SACCOConfigurationsPage() {
   const toast = useToast();
@@ -172,7 +177,13 @@ export default function SACCOConfigurationsPage() {
                         <p className="text-xs text-muted-foreground/60 font-mono mt-0.5">{config.config_key}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {config.config_type === 'boolean' ? (
+                        {POLICY_OPTIONS[config.config_key] ? (
+                          <select value={value} onChange={(event) => handleTextChange(config, event.target.value)}
+                            disabled={!config.is_editable}
+                            className="max-w-64 px-2.5 py-1.5 border border-border rounded-lg bg-background text-foreground text-sm">
+                            {POLICY_OPTIONS[config.config_key].map(([option, label]) => <option key={option} value={option}>{label}</option>)}
+                          </select>
+                        ) : config.config_type === 'boolean' ? (
                           <button
                             onClick={() => handleToggle(config)}
                             disabled={!config.is_editable}

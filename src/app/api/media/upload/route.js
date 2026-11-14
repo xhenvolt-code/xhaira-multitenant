@@ -54,6 +54,9 @@ export async function POST(request) {
     const quality = formData.get('quality') || 'original';
 
     if (!file) return NextResponse.json({ success: false, error: 'No file provided' }, { status: 400 });
+    if (typeof entity_type === 'string' && /(member|national[_-]?id|member[_-]?document)/i.test(entity_type)) {
+      return NextResponse.json({ success: false, error: 'Member identity documents must use the private member document upload endpoint' }, { status: 400 });
+    }
 
     const mimeType = file.type || '';
     const resourceType = getResourceType(mimeType);

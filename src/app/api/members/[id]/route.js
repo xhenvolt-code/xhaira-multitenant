@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 
 // GET /api/members/[id] — Get member details with accounts
 export async function GET(request, { params }) {
@@ -28,10 +29,19 @@ export async function GET(request, { params }) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
 
+    const fields = await getMemberFields();
+    const missingRequiredFields = getMissingRequiredMemberFields(fields, memberResult.rows[0]);
+    const requiredDocuments = await query(`SELECT dc.label FROM member_document_type_configs dc
+      WHERE dc.is_enabled AND dc.is_required AND NOT EXISTS
+        (SELECT 1 FROM member_documents md WHERE md.member_id = $1 AND md.document_key = dc.document_key)`, [id]);
+    const missingDocuments = requiredDocuments.rows.map((row) => row.label);
     return NextResponse.json({
       success: true,
       data: {
         ...memberResult.rows[0],
+        missing_required_fields: missingRequiredFields,
+        profile_incomplete: missingRequiredFields.length > 0 || missingDocuments.length > 0,
+        missing_required_documents: missingDocuments,
         accounts: accountsResult.rows,
       },
     });
@@ -57,6 +67,22 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
     const oldData = current.rows[0];
+    const configuredFields = await getMemberFields();
+    const suppliedFields = Object.fromEntries(configuredFields
+      .filter((field) => Object.hasOwn(body, field.field_name))
+      .filter((field) => !(field.is_required && !body[field.field_name] &&
+        !(oldData[field.field_name] ?? oldData.custom_fields?.[field.field_name])))
+      .map((field) => [field.field_name, body[field.field_name]]));
+    const rawCustomInput = body.custom_fields && typeof body.custom_fields === 'object' && !Array.isArray(body.custom_fields)
+      ? body.custom_fields : {};
+    const customInput = Object.fromEntries(Object.entries(rawCustomInput).filter(([key, value]) => {
+      const field = configuredFields.find((item) => item.field_name === key);
+      return !(field?.is_required && !value && !oldData.custom_fields?.[key]);
+    }));
+    const fieldValidation = validateMemberFields(configuredFields,
+      { ...suppliedFields, custom_fields: customInput }, { enforceRequired: false });
+    if (fieldValidation.error) return NextResponse.json({ success: false, error: fieldValidation.error }, { status: 400 });
+    const customFields = { ...(oldData.custom_fields || {}), ...fieldValidation.customFields };
 
     const {
       full_name, first_name, last_name, other_name,
@@ -109,6 +135,7 @@ export async function PUT(request, { params }) {
          suspended_reason = COALESCE($26, suspended_reason),
          notes = COALESCE($27, notes),
          status = COALESCE($28, status),
+         custom_fields = $29::jsonb,
          updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
@@ -122,7 +149,7 @@ export async function PUT(request, { params }) {
         emergency_contact_name || null, emergency_contact_phone || null,
         next_of_kin_name || null, next_of_kin_phone || null, next_of_kin_relationship || null,
         joined_date || null, exit_date || null, exit_reason || null, suspended_reason || null,
-        notes || null, status || null,
+        notes || null, status || null, JSON.stringify(customFields),
       ]
     );
 
@@ -134,6 +161,13 @@ export async function PUT(request, { params }) {
     auditFields.forEach(f => {
       if (body[f] !== undefined && body[f] !== oldData[f]) changedFields[f] = { from: oldData[f], to: body[f] };
     });
+    if (body.custom_fields) {
+      for (const [key, value] of Object.entries(body.custom_fields)) {
+        if (value !== oldData.custom_fields?.[key]) {
+          changedFields[key] = { from: oldData.custom_fields?.[key] ?? null, to: value };
+        }
+      }
+    }
     const action = status && status !== oldData.status ? 'status_changed' : 'updated';
     await query(
       `INSERT INTO member_audit_log (member_id, action, performed_by, old_values, new_values)

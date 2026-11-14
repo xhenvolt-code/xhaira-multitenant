@@ -23,7 +23,7 @@ const STATUS_STYLES = {
   dormant: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500',
 };
 
-const TABS = ['Profile', 'Accounts', 'Audit Trail'];
+const TABS = ['Profile', 'Accounts', 'Documents', 'Audit Trail'];
 
 const AUDIT_ACTION_STYLES = {
   created: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -54,6 +54,12 @@ export default function MemberDetailPage() {
   const { id } = useParams();
   const toast = useToast();
   const [member, setMember] = useState(null);
+  const [memberFields, setMemberFields] = useState([]);
+  const [memberDocuments, setMemberDocuments] = useState([]);
+  const [documentConfigs, setDocumentConfigs] = useState([]);
+  const [documentKey, setDocumentKey] = useState('');
+  const [documentFile, setDocumentFile] = useState(null);
+  const [uploadingDocument, setUploadingDocument] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Profile');
@@ -79,14 +85,27 @@ export default function MemberDetailPage() {
 
   const fetchData = async () => {
     try {
-      const [memberRes, accountsRes, typesRes] = await Promise.all([
+      const [memberRes, accountsRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
         fetchWithAuth(`/api/members/${id}`),
         fetchWithAuth(`/api/members/${id}/accounts`),
         fetchWithAuth('/api/account-types'),
+        fetchWithAuth('/api/member-field-configs'),
+        fetchWithAuth(`/api/member-documents?member_id=${id}`),
+        fetchWithAuth('/api/member-document-configs'),
       ]);
       const memberJson = await memberRes.json();
       const accountsJson = await accountsRes.json();
       const typesJson = await typesRes.json();
+      const fieldsJson = await fieldsRes.json();
+      if (fieldsJson.success) setMemberFields(fieldsJson.data || []);
+      const docsJson = await docsRes.json();
+      const docConfigsJson = await docConfigsRes.json();
+      if (docsJson.success) setMemberDocuments(docsJson.data || []);
+      if (docConfigsJson.success) {
+        const enabled = (docConfigsJson.data || []).filter((item) => item.is_enabled);
+        setDocumentConfigs(enabled);
+        setDocumentKey((current) => current || enabled[0]?.document_key || '');
+      }
       if (memberJson.success) {
         const m = memberJson.data;
         setMember(m);
@@ -110,6 +129,10 @@ export default function MemberDetailPage() {
           next_of_kin_phone: m.next_of_kin_phone || '',
           next_of_kin_relationship: m.next_of_kin_relationship || '',
           notes: m.notes || '',
+          custom_fields: Object.fromEntries((fieldsJson.data || [])
+            .filter((field) => field.is_active && !['first_name','last_name','other_name','gender','date_of_birth','national_id','id_type','email','phone','address','occupation','employer','monthly_income','emergency_contact_name','emergency_contact_phone','next_of_kin_name','next_of_kin_phone','next_of_kin_relationship','notes','photo_url','id_photo_url'].includes(field.field_name))
+            .filter((field) => Object.hasOwn(m.custom_fields || {}, field.field_name))
+            .map((field) => [field.field_name, m.custom_fields[field.field_name]])),
         });
       }
       if (accountsJson.success) setAccounts(accountsJson.data || []);
@@ -164,6 +187,25 @@ export default function MemberDetailPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const uploadMemberDocument = async (event) => {
+    event.preventDefault();
+    if (!documentFile || !documentKey) return toast.error('Choose a document type and file');
+    setUploadingDocument(true);
+    try {
+      const data = new FormData();
+      data.set('member_id', id);
+      data.set('document_key', documentKey);
+      data.set('file', documentFile);
+      const response = await fetchWithAuth('/api/member-documents', { method: 'POST', body: data });
+      const result = await response.json();
+      if (!result.success) return toast.error(result.error || 'Upload failed');
+      toast.success('Private document uploaded');
+      setDocumentFile(null);
+      fetchData();
+    } catch { toast.error('Upload failed'); }
+    finally { setUploadingDocument(false); }
   };
 
   const handleStatusChange = async (newStatus) => {
@@ -342,6 +384,9 @@ export default function MemberDetailPage() {
       {/* === PROFILE TAB === */}
       {activeTab === 'Profile' && (
         <div className="space-y-4">
+          {member.profile_incomplete && <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+            This profile needs an update. Missing: {[...(member.missing_required_fields || []), ...(member.missing_required_documents || [])].join(', ')}
+          </div>}
           <div className="bg-card border border-border rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
@@ -431,6 +476,17 @@ export default function MemberDetailPage() {
                     </div>
                   </div>
                 </div>
+                {memberFields.filter((field) => field.is_active && !['first_name','last_name','other_name','gender','date_of_birth','national_id','id_type','email','phone','address','occupation','employer','monthly_income','emergency_contact_name','emergency_contact_phone','next_of_kin_name','next_of_kin_phone','next_of_kin_relationship','notes','photo_url','id_photo_url'].includes(field.field_name)).map((field) => (
+                  <div key={field.field_name}>
+                    <label className={labelClass}>{field.label}{field.is_required ? ' *' : ''}</label>
+                    <input type={field.field_type === 'email' ? 'email' : field.field_type === 'date' ? 'date' : field.field_type === 'number' ? 'number' : 'text'}
+                      value={editForm.custom_fields?.[field.field_name] || ''}
+                      onChange={(event) => setEditForm((previous) => ({ ...previous,
+                        custom_fields: { ...(previous.custom_fields || {}), [field.field_name]: event.target.value },
+                      }))}
+                      className={inputClass} />
+                  </div>
+                ))}
                 {/* Advanced toggle */}
                 <div>
                   <button type="button" onClick={() => setShowAdvanced(!showAdvanced)}
@@ -719,6 +775,34 @@ export default function MemberDetailPage() {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* === AUDIT TRAIL TAB === */}
+      {activeTab === 'Documents' && (
+        <div className="bg-card border border-border rounded-xl p-5 space-y-5">
+          <h3 className="font-semibold">Private member documents</h3>
+          {documentConfigs.length > 0 && <form onSubmit={uploadMemberDocument} className="flex flex-wrap items-end gap-3 border-b border-border pb-5">
+            <label className="text-xs text-muted-foreground">Document type
+              <select value={documentKey} onChange={(event) => setDocumentKey(event.target.value)} className="block mt-1 px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm">
+                {documentConfigs.map((config) => <option key={config.document_key} value={config.document_key}>{config.label}{config.is_required ? ' *' : ''}</option>)}
+              </select>
+            </label>
+            <input type="file" accept={documentConfigs.find((item) => item.document_key === documentKey)?.accepted_mime_types.join(',')}
+              onChange={(event) => setDocumentFile(event.target.files?.[0] || null)} className="text-sm" />
+            <button disabled={uploadingDocument || !documentFile} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
+              {uploadingDocument ? 'Uploading…' : 'Upload privately'}
+            </button>
+          </form>}
+          {memberDocuments.length === 0 ? <p className="text-sm text-muted-foreground">No documents have been uploaded.</p> :
+            <div className="divide-y divide-border">
+              {memberDocuments.map((document) => <div key={document.id} className="flex items-center justify-between gap-4 py-3">
+                <div><p className="text-sm font-medium">{documentConfigs.find((item) => item.document_key === document.document_key)?.label || document.document_key}</p>
+                  <p className="text-xs text-muted-foreground">{document.original_filename} · {Math.ceil(Number(document.file_size) / 1024)} KB</p></div>
+                <a href={document.download_url} target="_blank" rel="noreferrer" className="text-sm text-blue-600 hover:underline">Download</a>
+              </div>)}
+            </div>}
+          <p className="text-xs text-muted-foreground">Download links expire after five minutes. Access and link issuance are recorded in the audit log.</p>
         </div>
       )}
 

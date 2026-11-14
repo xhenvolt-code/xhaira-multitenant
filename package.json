@@ -7,6 +7,9 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
+    "test": "node --test test/*.test.js",
+    "test:tenant-isolation": "node scripts/test-tenant-configuration-isolation.mjs",
+    "migrate:member-config": "node scripts/run-member-configuration-migration.mjs",
     "check:contrast": "node --input-type=module < scripts/check-contrast.js"
   },
   "dependencies": {

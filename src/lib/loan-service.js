@@ -74,9 +74,22 @@ export async function applyForLoan({ memberId, productId, memberAccountId, princ
     await client.query('BEGIN');
 
     // Verify member is active
-    const member = await client.query(`SELECT id, full_name, status FROM members WHERE id = $1`, [memberId]);
+    const member = await client.query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1`, [memberId]);
     if (member.rows.length === 0) throw new Error('Member not found');
     if (member.rows[0].status !== 'active') throw new Error('Member is not active');
+    const groupPolicy = await client.query(
+      `SELECT config_key, config_value FROM sacco_configurations
+        WHERE config_key IN ('groups.requirement', 'groups.nature')`
+    );
+    const policy = Object.fromEntries(groupPolicy.rows.map((row) => [row.config_key, row.config_value]));
+    if (member.rows[0].member_kind === 'group' &&
+        (policy['groups.requirement'] === 'disabled' || policy['groups.nature'] === 'sub_organization')) {
+      throw new Error('Group borrowing is disabled by this organization configuration');
+    }
+    if (member.rows[0].member_kind === 'individual' && policy['groups.requirement'] === 'required') {
+      const membership = await client.query('SELECT 1 FROM member_group_links WHERE member_id = $1 LIMIT 1', [memberId]);
+      if (!membership.rows[0]) throw new Error('Member must join a group before applying for a loan');
+    }
 
     // Verify member account exists
     if (memberAccountId) {

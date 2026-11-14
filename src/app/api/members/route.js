@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
-import { query } from '@/lib/db.js';
+import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { ensureMemberConfigurationDefaults, getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 
 // GET /api/members — List all SACCO members
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    await ensureMemberConfigurationDefaults();
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
@@ -17,6 +19,12 @@ export async function GET(request) {
 
     let where = 'WHERE 1=1';
     const params = [];
+    const groupPolicyResult = await query(`SELECT config_key, config_value FROM sacco_configurations
+      WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+    const groupPolicy = Object.fromEntries(groupPolicyResult.rows.map((row) => [row.config_key, row.config_value]));
+    if (groupPolicy['groups.requirement'] === 'disabled' || groupPolicy['groups.nature'] === 'sub_organization') {
+      where += ` AND m.member_kind = 'individual'`;
+    }
 
     if (search) {
       params.push(`%${search}%`);
@@ -34,7 +42,10 @@ export async function GET(request) {
       query(
         `SELECT m.*, u.name as user_name, u.email as user_email,
            (SELECT COUNT(*) FROM member_accounts ma WHERE ma.member_id = m.id) as account_count,
-           (SELECT COALESCE(SUM(vb.balance), 0) FROM v_member_account_balances vb WHERE vb.member_id = m.id AND vb.status = 'active') as total_balance
+           (SELECT COALESCE(SUM(vb.balance), 0) FROM v_member_account_balances vb WHERE vb.member_id = m.id AND vb.status = 'active') as total_balance,
+           ARRAY(SELECT dc.label FROM member_document_type_configs dc
+                  WHERE dc.is_enabled AND dc.is_required AND NOT EXISTS
+                    (SELECT 1 FROM member_documents md WHERE md.member_id = m.id AND md.document_key = dc.document_key)) AS missing_required_documents
          FROM members m
          LEFT JOIN users u ON m.user_id = u.id
          ${where}
@@ -46,10 +57,17 @@ export async function GET(request) {
     ]);
 
     const total = parseInt(countResult.rows[0]?.total || 0);
+    const fieldConfigs = await getMemberFields();
+    const members = dataResult.rows.map((member) => {
+      const missingRequiredFields = getMissingRequiredMemberFields(fieldConfigs, member);
+      const missingDocuments = member.missing_required_documents || [];
+      return { ...member, profile_incomplete: missingRequiredFields.length > 0 || missingDocuments.length > 0,
+        missing_required_fields: missingRequiredFields, missing_required_documents: missingDocuments };
+    });
 
     return NextResponse.json({
       success: true,
-      data: dataResult.rows,
+      data: members,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
@@ -76,6 +94,7 @@ export async function POST(request) {
       emergency_contact_name, emergency_contact_phone,
       next_of_kin_name, next_of_kin_phone, next_of_kin_relationship,
       joined_date, notes,
+      custom_fields, member_kind = 'individual',
     } = body;
 
     // Build full_name from parts if not provided
@@ -86,13 +105,46 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Full name (or first + last name) is required' }, { status: 400 });
     }
 
+    if (!['individual', 'group'].includes(member_kind)) {
+      return NextResponse.json({ success: false, error: 'Invalid member kind' }, { status: 400 });
+    }
+    const configuredFields = await getMemberFields();
+    const validation = validateMemberFields(configuredFields, { ...body, full_name: resolvedFullName, custom_fields });
+    if (validation.error) return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
+
+    const policies = await query(
+      `SELECT config_key, config_value FROM sacco_configurations
+        WHERE config_key IN ('groups.requirement', 'groups.nature')`
+    );
+    const policy = Object.fromEntries(policies.rows.map((row) => [row.config_key, row.config_value]));
+    const groupRequirement = policy['groups.requirement'] ?? 'optional';
+    const groupNature = policy['groups.nature'] ?? 'member_type';
+    if (member_kind === 'group' && (groupRequirement === 'disabled' || !['member_type', 'both'].includes(groupNature))) {
+      return NextResponse.json({ success: false, error: 'Group records are disabled by this organization configuration' }, { status: 400 });
+    }
+    if (member_kind === 'individual' && groupRequirement === 'required' && !body.group_id) {
+      return NextResponse.json({ success: false, error: 'Select a group for this member' }, { status: 400 });
+    }
+    if (body.group_id && !['sub_organization', 'both'].includes(groupNature)) {
+      return NextResponse.json({ success: false, error: 'This organization policy does not link individuals to groups' }, { status: 400 });
+    }
+    if (member_kind === 'individual' && body.group_id) {
+      const target = await query('SELECT id FROM member_groups WHERE id = $1', [body.group_id]);
+      if (!target.rows[0]) return NextResponse.json({ success: false, error: 'Selected group was not found' }, { status: 400 });
+    }
+
     // Generate membership number: MBR-YYYYMMDD-XXXXX
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
     const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
     const membership_number = `MBR-${dateStr}-${randomSuffix}`;
 
-    const result = await query(
+    const memberPool = getPool();
+    const client = await memberPool.connect();
+    let result;
+    try {
+      await client.query('BEGIN');
+      result = await client.query(
       `INSERT INTO members (
          full_name, first_name, last_name, other_name,
          email, phone, national_id, id_type, gender, date_of_birth, address,
@@ -100,10 +152,10 @@ export async function POST(request) {
          occupation, employer, monthly_income,
          emergency_contact_name, emergency_contact_phone,
          next_of_kin_name, next_of_kin_phone, next_of_kin_relationship,
-         joined_date, notes, user_id, membership_number
+         joined_date, notes, user_id, membership_number, custom_fields, member_kind
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-         $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+         $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27
        ) RETURNING *`,
       [
         resolvedFullName,
@@ -131,8 +183,25 @@ export async function POST(request) {
         notes || null,
         user_id || null,
         membership_number,
+        JSON.stringify(validation.customFields),
+        member_kind,
       ]
-    );
+      );
+
+      const member = result.rows[0];
+
+      if (member_kind === 'group') {
+        await client.query('INSERT INTO member_groups (group_member_id, group_name) VALUES ($1, $2)', [member.id, resolvedFullName]);
+      } else if (body.group_id) {
+        await client.query('INSERT INTO member_group_links (group_id, member_id) VALUES ($1, $2)', [body.group_id, member.id]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      await client.release();
+    }
 
     const member = result.rows[0];
 
