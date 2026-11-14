@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-configurations — List all SACCO configuration toggles
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category');
@@ -39,7 +38,6 @@ export async function POST(request) {
     if (perm.auth?.role !== 'superadmin') {
       return NextResponse.json({ success: false, error: 'Only the organization administrator can change SACCO settings' }, { status: 403 });
     }
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const { auth } = perm;
 
     const body = await request.json();

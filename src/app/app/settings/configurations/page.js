@@ -45,16 +45,22 @@ export default function SACCOConfigurationsPage() {
   const toast = useToast();
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState({});
   const [pendingChanges, setPendingChanges] = useState({});
 
   const fetchConfigs = async () => {
+    setLoading(true);
+    setLoadError('');
     try {
       const res = await fetchWithAuth('/api/sacco-configurations');
       const json = await res.json();
-      if (json.success) setConfigs(json.data || []);
-    } catch {
-      toast.error('Failed to load configurations');
+      if (!json.success) throw new Error(json.error || 'Failed to load configurations.');
+      setConfigs(json.data || []);
+    } catch (error) {
+      setConfigs([]);
+      setLoadError(error.message || 'Failed to load configurations.');
+      toast.error(error.message || 'Failed to load configurations');
     } finally {
       setLoading(false);
     }
@@ -140,6 +146,10 @@ export default function SACCOConfigurationsPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
+      {loadError && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+        <span>{loadError}</span>
+        <button type="button" onClick={fetchConfigs} className="shrink-0 underline">Retry</button>
+      </div>}
       <div className="flex items-center gap-3">
         <Link href="/app/settings" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-4 h-4" /> Settings
