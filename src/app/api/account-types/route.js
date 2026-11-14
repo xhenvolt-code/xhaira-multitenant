@@ -5,7 +5,10 @@ import { requirePermission } from '@/lib/permissions.js';
 // GET /api/account-types — List all account types
 export async function GET(request) {
   try {
-    const perm = await requirePermission(request, 'finance.view');
+    const financePerm = await requirePermission(request, 'finance.view');
+    const perm = financePerm instanceof NextResponse
+      ? await requirePermission(request, 'members.view')
+      : financePerm;
     if (perm instanceof NextResponse) return perm;
 
     const result = await query(

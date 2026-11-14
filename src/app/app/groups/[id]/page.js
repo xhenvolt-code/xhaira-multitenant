@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CreditCard, Edit2, Plus, Save, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { ArrowLeft, CreditCard, Edit2, Save, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
 import { useToast } from '@/components/ui/Toast';
+import GroupMemberPicker from '@/components/groups/GroupMemberPicker';
 
 const inputClass = 'rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground';
 
@@ -16,7 +17,7 @@ export default function GroupDetailPage() {
   const toast = useToast();
   const [group, setGroup] = useState(null);
   const [candidates, setCandidates] = useState([]);
-  const [selectedMember, setSelectedMember] = useState('');
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
   const [name, setName] = useState('');
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -45,15 +46,15 @@ export default function GroupDetailPage() {
   useEffect(() => { loadGroup(); }, [loadGroup]);
 
   const addMember = async () => {
-    if (!selectedMember) return;
+    if (!selectedMemberIds.length) return;
     setSaving(true);
     try {
       const result = await fetchWithAuth(`/api/groups/${id}/members`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member_id: selectedMember }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member_ids: selectedMemberIds }),
       });
       if (!result.success) throw new Error(result.error || 'Could not add member.');
-      setSelectedMember('');
-      toast.success('Member added to group');
+      setSelectedMemberIds([]);
+      toast.success(`${result.added_count || 0} member${result.added_count === 1 ? '' : 's'} added to group`);
       await loadGroup();
     } catch (error) { toast.error(error.message || 'Could not add member.'); }
     finally { setSaving(false); }
@@ -141,12 +142,9 @@ export default function GroupDetailPage() {
 
     {canManageMembers && <section className="space-y-4 rounded-xl border border-border bg-card p-5">
       <div><h2 className="font-semibold">Members</h2><p className="text-sm text-muted-foreground">Add individuals to this group or remove them when their membership changes.</p></div>
-      <div className="flex flex-wrap gap-2">
-        <select className={inputClass} value={selectedMember} onChange={(event) => setSelectedMember(event.target.value)}>
-          <option value="">Select an individual member</option>
-          {availableCandidates.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {member.membership_number}</option>)}
-        </select>
-        <button onClick={addMember} disabled={!selectedMember || saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"><UserPlus className="h-4 w-4" /> Add member</button>
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+        <GroupMemberPicker candidates={availableCandidates} selectedIds={selectedMemberIds} onChange={setSelectedMemberIds} disabled={saving} />
+        <button onClick={addMember} disabled={!selectedMemberIds.length || saving} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"><UserPlus className="h-4 w-4" /> Add {selectedMemberIds.length || ''} selected</button>
       </div>
       {group.members.length ? <div className="divide-y divide-border rounded-lg border border-border">
         {group.members.map((member) => <div key={member.id} className="flex flex-wrap items-center justify-between gap-3 p-3">

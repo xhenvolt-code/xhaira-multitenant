@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Users, Plus, UserPlus, X, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
+import GroupMemberPicker from '@/components/groups/GroupMemberPicker';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
 
@@ -16,7 +17,7 @@ export default function GroupsPage() {
   const [activeGroup, setActiveGroup] = useState(null);
   const [groupMembers, setGroupMembers] = useState([]);
   const [candidates, setCandidates] = useState([]);
-  const [selectedMember, setSelectedMember] = useState('');
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
   const toast = useToast();
 
   const loadGroups = useCallback(async () => {
@@ -57,8 +58,9 @@ export default function GroupsPage() {
   };
 
   const manageGroup = async (group) => {
-    if (activeGroup?.id === group.id) { setActiveGroup(null); return; }
+    if (activeGroup?.id === group.id) { setActiveGroup(null); setSelectedMemberIds([]); return; }
     setActiveGroup(group);
+    setSelectedMemberIds([]);
     try {
       const [membersResponse, candidatesResponse] = await Promise.all([
         fetchWithAuth(`/api/groups/${group.id}/members`), fetchWithAuth('/api/members?limit=100'),
@@ -70,17 +72,18 @@ export default function GroupsPage() {
   };
 
   const addMember = async () => {
-    if (!selectedMember || !activeGroup) return;
+    if (!selectedMemberIds.length || !activeGroup) return;
     try {
       const response = await fetchWithAuth(`/api/groups/${activeGroup.id}/members`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member_id: selectedMember }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ member_ids: selectedMemberIds }),
       });
       const result = await response.json();
       if (!result.success) return toast.error(result.error || 'Could not add member');
-      setSelectedMember('');
+      setSelectedMemberIds([]);
+      toast.success(`${result.added_count || 0} member${result.added_count === 1 ? '' : 's'} added to group`);
       await refreshGroupMembers(activeGroup);
       loadGroups();
-    } catch { toast.error('Could not add member'); }
+    } catch (error) { toast.error(error.message || 'Could not add members'); }
   };
 
   const removeMember = async (memberId) => {
@@ -127,12 +130,9 @@ export default function GroupsPage() {
             </div>
           </div>
           {activeGroup?.id === group.id && <div className="mt-4 border-t border-border pt-4 space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <select value={selectedMember} onChange={(event) => setSelectedMember(event.target.value)} className="px-3 py-2 border border-border rounded-lg bg-background text-sm">
-                <option value="">Select an individual member</option>
-                {candidates.filter((candidate) => !groupMembers.some((item) => item.id === candidate.id)).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.full_name}</option>)}
-              </select>
-              <button onClick={addMember} disabled={!selectedMember} className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"><UserPlus className="w-4 h-4" /> Add</button>
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <GroupMemberPicker candidates={candidates.filter((candidate) => !groupMembers.some((item) => item.id === candidate.id))} selectedIds={selectedMemberIds} onChange={setSelectedMemberIds} />
+              <button onClick={addMember} disabled={!selectedMemberIds.length} className="flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"><UserPlus className="w-4 h-4" /> Add {selectedMemberIds.length || ''} selected</button>
             </div>
             {groupMembers.map((member) => <div key={member.id} className="flex items-center justify-between text-sm">
               <span>{member.full_name} <span className="text-xs text-muted-foreground">{member.membership_number}</span></span>

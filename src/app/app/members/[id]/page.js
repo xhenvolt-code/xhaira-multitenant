@@ -72,6 +72,7 @@ export default function MemberDetailPage() {
   const [newAccount, setNewAccount] = useState({ account_type_id: '', currency: 'UGX' });
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [accountTypes, setAccountTypes] = useState([]);
+  const [accountTypesError, setAccountTypesError] = useState('');
   // Transaction state
   const [txModal, setTxModal] = useState(null);
   const [txModeModal, setTxModeModal] = useState(null);
@@ -148,8 +149,12 @@ export default function MemberDetailPage() {
       if (accountsJson.success) setAccounts(accountsJson.data || []);
       if (typesJson.success) {
         setAccountTypes(typesJson.data || []);
+        setAccountTypesError('');
         const firstType = (typesJson.data || [])[0];
         if (firstType) setNewAccount(a => ({ ...a, account_type_id: firstType.id }));
+      } else {
+        setAccountTypes([]);
+        setAccountTypesError(typesJson.error || 'Could not load account types.');
       }
     } catch (err) {
       console.error(err);
@@ -686,6 +691,9 @@ export default function MemberDetailPage() {
           </div>
 
           {showNewAccount && (
+            accountTypes.length === 0 ? <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              {accountTypesError || 'No account types are configured yet. Create an account type before opening an account.'}
+            </p> :
             <form onSubmit={handleCreateAccount} className="flex items-end gap-3 mb-4 p-3 bg-muted/30 rounded-lg border border-border">
               <div className="flex-1">
                 <label className={labelClass}>Account Type</label>
@@ -703,7 +711,7 @@ export default function MemberDetailPage() {
                   <option value="KES">KES</option>
                 </select>
               </div>
-              <button type="submit" disabled={creatingAccount}
+              <button type="submit" disabled={creatingAccount || !newAccount.account_type_id}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition whitespace-nowrap">
                 {creatingAccount ? 'Opening...' : 'Open'}
               </button>
