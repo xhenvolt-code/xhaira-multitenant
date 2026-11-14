@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function GET(request) {
@@ -9,7 +8,6 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-      await ensureMemberConfigurationDefaults(perm.auth.organizationId);
       const [groups, policies] = await Promise.all([
         query(`SELECT g.id, COALESCE(m.full_name, g.group_name) AS full_name, g.group_member_id,
                       COUNT(link.member_id)::int AS member_count
@@ -34,7 +32,6 @@ export async function POST(request) {
     const perm = await requirePermission(request, 'members.create');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const body = await request.json();
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) return NextResponse.json({ success: false, error: 'Group name is required' }, { status: 400 });

@@ -10,7 +10,9 @@ loadEnv({ path: path.join(root, '.env.local') });
 const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!connectionString) throw new Error('Set DATABASE_URL or POSTGRES_URL before running the migration.');
 const isDown = process.argv.includes('--down');
-const filename = isDown ? '957_tenant_member_configuration.down.sql' : '957_tenant_member_configuration.sql';
+const isDefaults = process.argv.includes('--defaults');
+const migration = isDefaults ? '958_database_member_configuration_defaults' : '957_tenant_member_configuration';
+const filename = `${migration}${isDown ? '.down' : ''}.sql`;
 const sql = fs.readFileSync(path.join(root, 'migrations', filename), 'utf8');
 const pool = new pg.Pool({ connectionString, ssl: { rejectUnauthorized: false } });
 try {

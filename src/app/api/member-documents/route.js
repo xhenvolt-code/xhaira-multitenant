@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { v2 as cloudinary } from 'cloudinary';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
@@ -39,7 +38,6 @@ export async function POST(request) {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const form = await request.formData();
     const file = form.get('file');
     const memberId = form.get('member_id');

@@ -110,8 +110,8 @@ Your system is ready to deploy! Choose your preferred platform below:
 
 ### Database Setup:
 - [ ] PostgreSQL database created
-- [ ] Apply each database migration before deploying application code that depends on it. For tenant member, group, and private document configuration, run `npm run migrate:member-config` with `DATABASE_URL` pointing to the target database.
-- [ ] Verify migration 957 is installed: `SELECT to_regprocedure('public.seed_member_configuration_defaults(uuid)') IS NOT NULL;` should return `true`.
+- [ ] Apply each database migration before deploying application code that depends on it. For tenant member, group, and private document configuration, run `npm run migrate:member-config` and then `npm run migrate:member-defaults` with `DATABASE_URL` pointing to the target database. Migration 958 backfills missing defaults once; application requests only load configuration rows.
+- [ ] Verify the database seeder is installed: `SELECT to_regprocedure('public.seed_member_configuration_defaults(uuid)') IS NOT NULL;` should return `true`. Runtime access to the seeder is revoked; organization provisioning calls it from the database.
 - [ ] Initial user account created (optional)
 
 ### Code Quality:
@@ -181,6 +181,7 @@ After deployment, run:
 ```bash
 # Apply the member, group, and private-document schema migration before deploying code that uses those APIs
 npm run migrate:member-config
+npm run migrate:member-defaults
 
 # Create initial admin user (optional)
 npm run seed

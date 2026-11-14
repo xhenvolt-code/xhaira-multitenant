@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 const MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -11,7 +10,6 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-      await ensureMemberConfigurationDefaults(perm.auth.organizationId);
       const result = await query('SELECT * FROM member_document_type_configs ORDER BY sort_order, label');
       return NextResponse.json({ success: true, data: result.rows });
     });
@@ -26,7 +24,6 @@ export async function PUT(request) {
     if (perm instanceof NextResponse) return perm;
     if (perm.auth?.role !== 'superadmin') return NextResponse.json({ success: false, error: 'Only the organization administrator can change document settings' }, { status: 403 });
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const { updates } = await request.json();
     if (!Array.isArray(updates)) return NextResponse.json({ success: false, error: 'updates array required' }, { status: 400 });
     for (const update of updates) {

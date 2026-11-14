@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults, getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
+import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members — List all SACCO members
@@ -10,7 +10,6 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 function validValidationRules(rules) {
@@ -32,7 +31,6 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-      await ensureMemberConfigurationDefaults(perm.auth.organizationId);
       const result = await query(
         `SELECT * FROM member_field_configs ORDER BY section, sort_order, label`
       );
@@ -52,7 +50,6 @@ export async function PUT(request) {
       return NextResponse.json({ success: false, error: 'Only the organization administrator can change member fields' }, { status: 403 });
     }
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const body = await request.json();
     const { updates } = body; // Array of { field_name, is_active, is_required }
