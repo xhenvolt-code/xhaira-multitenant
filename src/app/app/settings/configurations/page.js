@@ -48,6 +48,12 @@ export default function SACCOConfigurationsPage() {
     const key = config.config_key;
     if (key in pendingChanges) return pendingChanges[key];
     if (config.config_type === 'boolean') return config.config_value === true || config.config_value === 'true';
+    if (key === 'transfers.approval_threshold') {
+      const value = typeof config.config_value === 'string'
+        ? (() => { try { return JSON.parse(config.config_value); } catch { return config.config_value; } })()
+        : config.config_value;
+      return value && typeof value === 'object' ? value.amount ?? '' : value ?? '';
+    }
     return config.config_value ?? '';
   };
 
@@ -197,9 +203,13 @@ export default function SACCOConfigurationsPage() {
                           </button>
                         ) : (
                           <input
-                            type={config.config_type === 'number' ? 'number' : 'text'}
+                            type={config.config_key === 'transfers.approval_threshold' || config.config_type === 'number' ? 'number' : 'text'}
                             value={value}
-                            onChange={e => handleTextChange(config, config.config_type === 'number' ? parseFloat(e.target.value) : e.target.value)}
+                            min={config.config_key === 'transfers.approval_threshold' ? '0' : undefined}
+                            step={config.config_key === 'transfers.approval_threshold' ? '1' : undefined}
+                            onChange={e => handleTextChange(config, config.config_key === 'transfers.approval_threshold' || config.config_type === 'number'
+                              ? (e.target.value === '' ? '' : Number(e.target.value))
+                              : e.target.value)}
                             disabled={!config.is_editable}
                             className="w-32 px-2.5 py-1.5 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                           />

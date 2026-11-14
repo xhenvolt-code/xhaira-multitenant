@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-configurations — List all SACCO configuration toggles
 export async function GET(request) {
@@ -45,6 +46,16 @@ export async function POST(request) {
     if (!config_key) {
       return NextResponse.json({ success: false, error: 'config_key is required' }, { status: 400 });
     }
+    let normalizedConfigValue = config_value;
+    if (config_key === 'transfers.approval_threshold') {
+      const amount = typeof config_value === 'object' && config_value !== null
+        ? Number(config_value.amount)
+        : Number(config_value);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return NextResponse.json({ success: false, error: 'Approval threshold must be a non-negative amount' }, { status: 400 });
+      }
+      normalizedConfigValue = { amount };
+    }
 
     const policyValues = {
       'groups.requirement': ['required', 'optional', 'disabled'],
@@ -85,39 +96,46 @@ export async function POST(request) {
       }
     }
 
-    const oldResult = await query('SELECT * FROM sacco_configurations WHERE config_key = $1', [config_key]);
-
-    const result = await query(
-      `INSERT INTO sacco_configurations (config_key, config_value, label, description, config_type, category, updated_by)
-       VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7)
-       ON CONFLICT (organization_id, config_key) DO UPDATE SET
-         config_value = EXCLUDED.config_value,
-         label = COALESCE(EXCLUDED.label, sacco_configurations.label),
-         description = COALESCE(EXCLUDED.description, sacco_configurations.description),
-         updated_by = EXCLUDED.updated_by,
-         updated_at = NOW()
-       RETURNING *`,
-      [
-        config_key,
-        JSON.stringify(config_value !== undefined ? config_value : true),
-        label || null,
-        description || null,
-        config_type || 'boolean',
-        category || 'general',
-        auth?.userId || null,
-      ]
-    );
-
-    const oldValue = oldResult.rows[0];
-    if (JSON.stringify(oldValue?.config_value ?? null) !== JSON.stringify(result.rows[0]?.config_value ?? null)) {
-      await query(
-        `INSERT INTO member_configuration_audit (setting_type, setting_key, old_value, new_value, changed_by)
-         VALUES ('sacco_config', $1, $2::jsonb, $3::jsonb, $4)`,
-        [config_key, JSON.stringify(oldValue ?? null), JSON.stringify(result.rows[0]), auth.userId]
+    const saved = await runWithOrganizationContext(auth.organizationId, async () => {
+      const context = await query('SELECT public.current_organization_id() AS organization_id');
+      if (context.rows[0]?.organization_id !== auth.organizationId) {
+        throw new Error('Authenticated organization context is missing or inconsistent. Please sign in again.');
+      }
+      const oldResult = await query('SELECT * FROM sacco_configurations WHERE organization_id = $1 AND config_key = $2', [auth.organizationId, config_key]);
+      const result = await query(
+        `INSERT INTO sacco_configurations (organization_id, config_key, config_value, label, description, config_type, category, updated_by)
+         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+         ON CONFLICT (organization_id, config_key) DO UPDATE SET
+           config_value = EXCLUDED.config_value,
+           label = COALESCE(EXCLUDED.label, sacco_configurations.label),
+           description = COALESCE(EXCLUDED.description, sacco_configurations.description),
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()
+         RETURNING *`,
+        [
+          auth.organizationId,
+          config_key,
+          JSON.stringify(normalizedConfigValue !== undefined ? normalizedConfigValue : true),
+          label || null,
+          description || null,
+          config_type || (config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
+          category || 'general',
+          auth.userId,
+        ]
       );
-    }
 
-    return NextResponse.json({ success: true, data: result.rows[0] });
+      const oldValue = oldResult.rows[0];
+      if (JSON.stringify(oldValue?.config_value ?? null) !== JSON.stringify(result.rows[0]?.config_value ?? null)) {
+        await query(
+          `INSERT INTO member_configuration_audit (setting_type, setting_key, old_value, new_value, changed_by)
+           VALUES ('sacco_config', $1, $2::jsonb, $3::jsonb, $4)`,
+          [config_key, JSON.stringify(oldValue ?? null), JSON.stringify(result.rows[0]), auth.userId]
+        );
+      }
+      return result.rows[0];
+    });
+
+    return NextResponse.json({ success: true, data: saved });
   } catch (error) {
     console.error('[Config] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
