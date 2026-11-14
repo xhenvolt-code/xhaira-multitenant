@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CreditCard, Search, Filter, DollarSign, CheckCircle, Clock, Plus } from 'lucide-react';
+import { CreditCard, Search, Filter, DollarSign, CheckCircle, Clock, Plus, Smartphone } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import Link from 'next/link';
 import NewPaymentModal from '@/components/modals/NewPaymentModal';
@@ -13,8 +13,79 @@ export default function PaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [showNewPayment, setShowNewPayment] = useState(false);
+  const [collectionMeta, setCollectionMeta] = useState({ configured: false, enabled: false });
+  const [members, setMembers] = useState([]);
+  const [memberAccounts, setMemberAccounts] = useState([]);
+  const [mobileAccounts, setMobileAccounts] = useState([]);
+  const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', settlementAccountId: '', phone: '', amountUgx: '' });
+  const [collectionIntent, setCollectionIntent] = useState(null);
+  const [collectionBusy, setCollectionBusy] = useState(false);
+  const [collectionError, setCollectionError] = useState('');
 
   useEffect(() => { fetchPayments(); }, [statusFilter]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      fetchWithAuth('/api/payment-collections'),
+      fetchWithAuth('/api/members?status=active&limit=100'),
+      fetchWithAuth('/api/accounts'),
+    ]).then(([collection, memberList, accountList]) => {
+      if (!active) return;
+      setCollectionMeta({ configured: collection.configured === true, enabled: collection.enabled === true });
+      setMembers(memberList.success ? memberList.data || [] : []);
+      setMobileAccounts(accountList.success ? (accountList.data || []).filter(account => account.type === 'mobile_money' && account.is_active) : []);
+    }).catch(() => {
+      if (active) setCollectionError('Unable to load payment account options.');
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!collectionIntent || ['settled', 'failed', 'expired', 'review'].includes(collectionIntent.status)) return;
+    let active = true;
+    const timer = setInterval(async () => {
+      const current = await fetchWithAuth(`/api/payment-collections/${collectionIntent.id}`);
+      if (active && current.success) setCollectionIntent(current.data);
+    }, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [collectionIntent]);
+
+  const onMemberChange = async (memberId) => {
+    setCollectionForm(form => ({ ...form, memberId, memberAccountId: '' }));
+    setMemberAccounts([]);
+    if (!memberId) return;
+    const result = await fetchWithAuth(`/api/members/${memberId}/accounts`);
+    if (result.success) setMemberAccounts((result.data || []).filter(account => account.status === 'active'));
+  };
+
+  const startCollection = async (event) => {
+    event.preventDefault();
+    setCollectionBusy(true);
+    setCollectionError('');
+    try {
+      const idempotencyKey = crypto.randomUUID();
+      const result = await fetchWithAuth('/api/payment-collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({
+          amountUgx: Number(collectionForm.amountUgx),
+          phone: collectionForm.phone,
+          settlementAccountId: collectionForm.settlementAccountId,
+          memberAccountId: collectionForm.memberAccountId,
+        }),
+      });
+      if (!result.success) {
+        setCollectionError(result.error || 'Could not start mobile-money collection.');
+        return;
+      }
+      setCollectionIntent({ id: result.id, status: result.status, amount_minor: result.amountUgx });
+    } catch (error) {
+      setCollectionError(error.message || 'Could not start mobile-money collection.');
+    } finally {
+      setCollectionBusy(false);
+    }
+  };
 
   const fetchPayments = async () => {
     try {
@@ -41,6 +112,71 @@ export default function PaymentsPage() {
       </div>
 
       <NewPaymentModal isOpen={showNewPayment} onClose={() => setShowNewPayment(false)} onCreated={() => { setLoading(true); fetchPayments(); }} />
+
+      <section className="space-y-4 rounded-lg border border-border bg-card p-5">
+        <div className="flex items-start gap-3">
+          <Smartphone className="mt-0.5 h-5 w-5 text-emerald-700" />
+          <div>
+            <h2 className="font-semibold text-foreground">Mobile money collection</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {collectionMeta.enabled ? 'MarzPay collections are enabled.' : collectionMeta.configured ? 'MarzPay is configured, but live collections are disabled.' : 'MarzPay is not configured.'}
+            </p>
+          </div>
+        </div>
+
+        {!collectionMeta.enabled && (
+          <p role="status" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            No payment request can be sent until the server explicitly enables MarzPay collections.
+          </p>
+        )}
+
+        {collectionError && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{collectionError}</p>}
+
+        <form onSubmit={startCollection} className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <label className="text-sm text-muted-foreground">
+            Member
+            <select required value={collectionForm.memberId} onChange={event => onMemberChange(event.target.value)} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground">
+              <option value="">Select member</option>
+              {members.map(member => <option key={member.id} value={member.id}>{member.full_name} ({member.membership_number})</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Member account
+            <select required value={collectionForm.memberAccountId} onChange={event => setCollectionForm(form => ({ ...form, memberAccountId: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground">
+              <option value="">Select active account</option>
+              {memberAccounts.map(account => <option key={account.id} value={account.id}>{account.account_number} · {account.account_type}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Settlement account
+            <select required value={collectionForm.settlementAccountId} onChange={event => setCollectionForm(form => ({ ...form, settlementAccountId: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground">
+              <option value="">Select mobile-money account</option>
+              {mobileAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Payer phone
+            <input required inputMode="tel" autoComplete="tel" value={collectionForm.phone} onChange={event => setCollectionForm(form => ({ ...form, phone: event.target.value }))} placeholder="07xx xxx xxx" className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Amount (UGX)
+            <input required type="number" min="1" step="1" value={collectionForm.amountUgx} onChange={event => setCollectionForm(form => ({ ...form, amountUgx: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
+          </label>
+          <div className="flex items-end">
+            <button type="submit" disabled={!collectionMeta.enabled || collectionBusy || members.length === 0 || mobileAccounts.length === 0} className="flex w-full items-center justify-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
+              <Smartphone className="h-4 w-4" /> {collectionBusy ? 'Starting…' : 'Request payment'}
+            </button>
+          </div>
+        </form>
+
+        {collectionIntent && (
+          <div role="status" className="rounded border border-border bg-muted/40 p-3 text-sm">
+            <span className="font-medium">Collection {collectionIntent.status}</span>
+            <span className="ml-2 text-muted-foreground">UGX {Number(collectionIntent.amount_minor || 0).toLocaleString()}</span>
+            {collectionIntent.failure_reason && <p className="mt-1 text-red-700">{collectionIntent.failure_reason}</p>}
+          </div>
+        )}
+      </section>
 
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => { setStatusFilter(''); setLoading(true); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${!statusFilter ? 'bg-blue-600 text-white' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>

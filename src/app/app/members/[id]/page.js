@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
+import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link from 'next/link';
 
 const STATUS_STYLES = {
@@ -66,6 +67,7 @@ export default function MemberDetailPage() {
   const [accountTypes, setAccountTypes] = useState([]);
   // Transaction state
   const [txModal, setTxModal] = useState(null);
+  const [txModeModal, setTxModeModal] = useState(null);
   const [txAmount, setTxAmount] = useState('');
   const [txDescription, setTxDescription] = useState('');
   const [txLoading, setTxLoading] = useState(false);
@@ -213,7 +215,7 @@ export default function MemberDetailPage() {
     if (!txAmount || parseFloat(txAmount) <= 0 || !txModal) return;
     setTxLoading(true);
     try {
-      const res = await fetchWithAuth('/api/transactions', {
+      const res = await fetchWithAuth('/api/savings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -221,6 +223,7 @@ export default function MemberDetailPage() {
           member_account_id: txModal.accountId,
           amount: parseFloat(txAmount),
           description: txDescription || `${txModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} — ${txModal.accountNumber}`,
+          payment_method: txModal.paymentMethod || 'cash',
         }),
       });
       const json = await res.json();
@@ -666,11 +669,11 @@ export default function MemberDetailPage() {
                         </div>
                         {a.status === 'active' && (
                           <div className="flex gap-1">
-                            <button onClick={() => setTxModal({ action: 'deposit', accountId: accId, accountNumber: a.account_number })}
+                            <button onClick={() => setTxModeModal({ action: 'deposit', accountId: accId, account: a })}
                               className="p-1.5 rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400" title="Deposit">
                               <ArrowDownRight className="w-3.5 h-3.5" />
                             </button>
-                            <button onClick={() => setTxModal({ action: 'withdraw', accountId: accId, accountNumber: a.account_number })}
+                            <button onClick={() => setTxModeModal({ action: 'withdraw', accountId: accId, account: a })}
                               className="p-1.5 rounded-md bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400" title="Withdraw">
                               <ArrowUpRight className="w-3.5 h-3.5" />
                             </button>
@@ -774,6 +777,15 @@ export default function MemberDetailPage() {
       )}
 
       {/* Deposit/Withdraw Modal */}
+      {txModeModal && (
+        <TransactionModeDialog
+          action={txModeModal.action}
+          account={{ memberAccountId: txModeModal.accountId, label: `${member?.full_name || 'Member'} · ${txModeModal.account.account_number || ''}`, balance: txModeModal.account.balance }}
+          onClose={() => setTxModeModal(null)}
+          onManual={(paymentMethod) => { setTxModeModal(null); setTxModal({ action: txModeModal.action, accountId: txModeModal.accountId, accountNumber: txModeModal.account.account_number, paymentMethod }); }}
+          onSuccess={() => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); setTxModeModal(null); fetchData(); fetchLedger(txModeModal.accountId); }}
+        />
+      )}
       {txModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <form onSubmit={handleTransaction} className="bg-card border border-border rounded-xl p-6 w-full max-w-sm space-y-4 shadow-xl">

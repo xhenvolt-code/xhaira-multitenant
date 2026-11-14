@@ -169,7 +169,7 @@ export async function getMemberAccountBalance(memberAccountId) {
 /**
  * Deposit money into a member account (from SACCO cash)
  */
-export async function deposit({ memberAccountId, amount, description, reference, userId }) {
+export async function deposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash' }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -180,6 +180,7 @@ export async function deposit({ memberAccountId, amount, description, reference,
       description: description || 'Member deposit',
       transaction_type: 'deposit',
       reference,
+      metadata: { payment_method: paymentMethod },
       userId,
       entries: [
         { member_account_id: memberAccountId, type: 'CREDIT', amount },
@@ -195,7 +196,7 @@ export async function deposit({ memberAccountId, amount, description, reference,
 /**
  * Withdraw money from a member account (to SACCO cash)
  */
-export async function withdraw({ memberAccountId, amount, description, reference, userId }) {
+export async function withdraw({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash' }) {
   // Check sufficient balance
   const balance = await getMemberAccountBalance(memberAccountId);
   if (balance < amount) {
@@ -212,6 +213,7 @@ export async function withdraw({ memberAccountId, amount, description, reference
       description: description || 'Member withdrawal',
       transaction_type: 'withdrawal',
       reference,
+      metadata: { payment_method: paymentMethod },
       userId,
       entries: [
         { member_account_id: memberAccountId, type: 'DEBIT', amount },

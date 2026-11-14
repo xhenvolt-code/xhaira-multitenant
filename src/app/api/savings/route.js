@@ -74,6 +74,10 @@ export async function POST(request) {
 
     const body = await request.json();
     const { action, member_account_id, amount, description, reference, force } = body;
+    const paymentMethod = body.payment_method || 'cash';
+    if (!['cash', 'card', 'bank_transfer', 'check'].includes(paymentMethod)) {
+      return NextResponse.json({ success: false, error: 'payment_method must be cash, card, bank_transfer, or check' }, { status: 400 });
+    }
 
     if (!action || !['deposit', 'withdraw'].includes(action)) {
       return NextResponse.json(
@@ -103,6 +107,7 @@ export async function POST(request) {
         description,
         reference,
         userId:          perm.userId,
+        paymentMethod,
       });
     } else {
       // Superadmin can force-bypass rules; others cannot
@@ -114,6 +119,7 @@ export async function POST(request) {
         reference,
         userId:          perm.userId,
         force:           isSuperAdmin && force === true,
+        paymentMethod,
       });
     }
 

@@ -1,0 +1,135 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const DEFAULT_BASE = 'https://wallet.wearemarz.com/api/v1';
+
+export function getMarzpayConfig() {
+  const apiKey = process.env.MARZPAY_API_KEY?.trim();
+  const apiSecret = process.env.MARZPAY_API_SECRET?.trim();
+  if (!apiKey || !apiSecret) return null;
+  return {
+    apiKey,
+    apiSecret,
+    baseUrl: (process.env.MARZPAY_BASE_URL?.trim() || DEFAULT_BASE).replace(/\/+$/, ''),
+    webhookSecret: process.env.MARZPAY_WEBHOOK_SECRET?.trim() || null,
+  };
+}
+
+export const isMarzpayConfigured = () => getMarzpayConfig() !== null;
+
+export function normalizeMarzpayTransaction(body) {
+  const root = body?.data ?? body ?? {};
+  const transaction = root.transaction ?? {};
+  const collection = root.collection ?? {};
+  const disbursement = root.disbursement ?? {};
+  const amount = collection.amount ?? disbursement.amount ?? transaction.amount ?? {};
+  const raw = amount.raw ?? amount.value ?? null;
+  return {
+    uuid: transaction.uuid ?? collection.uuid ?? disbursement.uuid ?? null,
+    reference: transaction.reference ?? collection.reference ?? disbursement.reference ?? null,
+    status: transaction.status ?? collection.status ?? disbursement.status ?? null,
+    mode: collection.mode ?? disbursement.mode ?? transaction.mode ?? null,
+    currency: amount.currency ?? null,
+    amountMinor: raw == null ? null : Number(raw),
+    provider: collection.provider ?? disbursement.provider ?? transaction.provider ?? null,
+    message: transaction.message ?? collection.message ?? disbursement.message ?? root.message ?? null,
+  };
+}
+
+async function requestMarzpay(method, path, body, formData = false) {
+  const config = getMarzpayConfig();
+  if (!config) return { ok: false, status: 0, json: null, error: 'MarzPay is not configured' };
+  try {
+    const response = await fetch(`${config.baseUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${config.apiKey}:${config.apiSecret}`).toString('base64')}`,
+        Accept: 'application/json',
+        ...(body && !formData ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? (formData ? body : JSON.stringify(body)) : undefined,
+      signal: AbortSignal.timeout(25000),
+    });
+    const json = await response.json().catch(() => null);
+    return { ok: response.ok, status: response.status, json, error: json?.message || json?.error || json?.detail || null };
+  } catch (error) {
+    return { ok: false, status: 0, json: null, error: error?.name === 'TimeoutError' ? 'MarzPay response timed out' : 'MarzPay network request failed' };
+  }
+}
+
+function flattenMetadata(metadata) {
+  return metadata.flatMap(item => Object.entries(item || {}).map(([key, value]) => ({ [key]: String(value) }))).slice(0, 10);
+}
+
+export async function collectMarzpayMoney({ amountUgx, phone, reference, description, callbackUrl, metadata = [] }) {
+  if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, outcomeUnknown: false, transaction: null, error: 'Amount must be a positive whole number of UGX' };
+  const base = {
+    amount: amountUgx,
+    country: 'UG',
+    reference,
+    phone_number: phone,
+    description: String(description || 'Xhaira mobile money collection').slice(0, 255),
+    ...(callbackUrl ? { callback_url: callbackUrl.slice(0, 255) } : {}),
+  };
+  const flatMetadata = flattenMetadata(metadata);
+  let response = await requestMarzpay('POST', '/collect-money', flatMetadata.length ? { ...base, metadata: flatMetadata } : base);
+  if (!response.ok && response.status >= 400 && response.status < 500 && flatMetadata.length && /metadata/i.test(JSON.stringify(response.json))) {
+    response = await requestMarzpay('POST', '/collect-money', base);
+  }
+  if (!response.ok || String(response.json?.status || '').toLowerCase() === 'error') {
+    return { ok: false, outcomeUnknown: response.status === 0 || response.status >= 500, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
+  }
+  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json), error: null };
+}
+
+export async function getMarzpayCollection(uuid) {
+  if (!/^[0-9a-fA-F-]{20,64}$/.test(String(uuid || ''))) return { ok: false, transaction: null, error: 'Invalid provider transaction ID' };
+  const response = await requestMarzpay('GET', `/collect-money/${encodeURIComponent(uuid)}`);
+  if (!response.ok) return { ok: false, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
+  return { ok: true, transaction: normalizeMarzpayTransaction(response.json), error: null };
+}
+
+export async function sendMarzpayMoney({ amountUgx, phone, reference, description, callbackUrl, metadata = [] }) {
+  if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, outcomeUnknown: false, transaction: null, error: 'Amount must be a positive whole number of UGX' };
+  const body = new FormData();
+  body.set('amount', String(amountUgx));
+  body.set('country', 'UG');
+  body.set('phone_number', phone);
+  body.set('reference', reference);
+  body.set('description', String(description || 'Xhaira mobile money payout').slice(0, 255));
+  if (callbackUrl) body.set('callback_url', callbackUrl.slice(0, 255));
+  const flatMetadata = flattenMetadata(metadata);
+  if (flatMetadata.length) body.set('metadata', JSON.stringify(flatMetadata));
+  const response = await requestMarzpay('POST', '/send-money', body, true);
+  if (!response.ok || String(response.json?.status || '').toLowerCase() === 'error') {
+    return { ok: false, outcomeUnknown: response.status === 0 || response.status >= 500, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
+  }
+  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json), error: null };
+}
+
+export async function getMarzpayDisbursement(uuid) {
+  if (!/^[0-9a-fA-F-]{20,64}$/.test(String(uuid || ''))) return { ok: false, transaction: null, error: 'Invalid provider transaction ID' };
+  const response = await requestMarzpay('GET', `/send-money/${encodeURIComponent(uuid)}`);
+  if (!response.ok) return { ok: false, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
+  return { ok: true, transaction: normalizeMarzpayTransaction(response.json), error: null };
+}
+
+export function verifyMarzpayWebhook(rawBody, signatureHeader, secret, nowMs = Date.now()) {
+  if (!signatureHeader) return 'unsigned';
+  const match = /t=(\d+)\s*,\s*v1=([0-9a-fA-F]+)/.exec(String(signatureHeader));
+  if (!match || Math.abs(nowMs / 1000 - Number(match[1])) > 300) return 'invalid';
+  const expected = createHmac('sha256', secret).update(`${match[1]}.${rawBody}`).digest();
+  const received = Buffer.from(match[2], 'hex');
+  return expected.length === received.length && timingSafeEqual(expected, received) ? 'valid' : 'invalid';
+}
+
+export function judgeMarzpayCollection(transaction, expectedAmount) {
+  const status = String(transaction?.status || '').trim().toLowerCase();
+  const mode = String(transaction?.mode || '').trim().toLowerCase();
+  const allowSandbox = process.env.NODE_ENV !== 'production' && process.env.MARZPAY_ALLOW_SANDBOX === '1';
+  if (['failed', 'cancelled', 'canceled', 'rejected', 'expired'].includes(status)) return { state: 'failed', reason: transaction?.message || `MarzPay reports ${status}` };
+  if (!['completed', 'successful', 'success', 'sandbox'].includes(status)) return { state: 'processing', reason: null };
+  if ((mode === 'sandbox' || status === 'sandbox') && !allowSandbox) return { state: 'failed', reason: 'Sandbox transactions cannot settle real payments' };
+  if (String(transaction?.currency || '').toUpperCase() !== 'UGX') return { state: 'review', reason: 'Provider currency is not UGX' };
+  if (!Number.isSafeInteger(transaction?.amountMinor) || transaction.amountMinor !== expectedAmount) return { state: 'review', reason: 'Provider amount does not match the requested amount' };
+  return { state: 'settled', reason: null };
+}

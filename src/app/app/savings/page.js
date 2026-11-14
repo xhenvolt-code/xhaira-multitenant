@@ -9,6 +9,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { fetchWithAuth }     from '@/lib/fetch-client';
 import { formatCurrency }    from '@/lib/format-currency';
 import { usePermissions }    from '@/components/providers/PermissionProvider';
+import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link                  from 'next/link';
 import {
   Wallet, ArrowDownLeft, ArrowUpRight, RefreshCw,
@@ -33,7 +34,7 @@ function BehaviorBadge({ label, enabled }) {
 }
 
 // ─── Transaction Modal ────────────────────────────────────────────────────────
-function TransactionModal({ account, action, onClose, onSuccess }) {
+function TransactionModal({ account, action, paymentMethod = 'cash', onClose, onSuccess }) {
   const [amount,      setAmount]      = useState('');
   const [description, setDescription] = useState('');
   const [reference,   setReference]   = useState('');
@@ -55,6 +56,7 @@ function TransactionModal({ account, action, onClose, onSuccess }) {
           amount:            parseFloat(amount),
           description,
           reference,
+          payment_method: paymentMethod,
         }),
       });
       const data = await res.json();
@@ -170,6 +172,7 @@ export default function SavingsPage() {
   const [page,      setPage]      = useState(1);
   const [totalPages,setTotalPages]= useState(1);
   const [modal,     setModal]     = useState(null); // { account, action }
+  const [modeModal, setModeModal] = useState(null);
   const [toast,     setToast]     = useState(null);
   const [behaviors, setBehaviors] = useState({});   // { [member_account_id]: behavior }
 
@@ -333,13 +336,13 @@ export default function SavingsPage() {
                         <td className="px-4 py-3">
                           <div className="flex gap-2 justify-end">
                             <button
-                              onClick={() => setModal({ account: { ...acc, ...(beh || {}) }, action: 'deposit' })}
+                              onClick={() => setModeModal({ account: { ...acc, ...(beh || {}) }, action: 'deposit' })}
                               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 text-xs font-medium"
                             >
                               <ArrowDownLeft className="w-3.5 h-3.5" /> Deposit
                             </button>
                             <button
-                              onClick={() => setModal({ account: { ...acc, ...(beh || {}) }, action: 'withdraw' })}
+                              onClick={() => setModeModal({ account: { ...acc, ...(beh || {}) }, action: 'withdraw' })}
                               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-900/20 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-400 text-xs font-medium"
                             >
                               <ArrowUpRight className="w-3.5 h-3.5" /> Withdraw
@@ -372,10 +375,20 @@ export default function SavingsPage() {
       )}
 
       {/* Transaction Modal */}
+      {modeModal && (
+        <TransactionModeDialog
+          action={modeModal.action}
+          account={{ memberAccountId: modeModal.account.member_account_id, label: `${modeModal.account.full_name} · ${modeModal.account.account_type_name}`, balance: modeModal.account.balance, allowsWithdrawal: modeModal.account.allows_withdrawal }}
+          onClose={() => setModeModal(null)}
+          onManual={(paymentMethod) => { setModeModal(null); setModal({ ...modeModal, paymentMethod }); }}
+          onSuccess={() => { showToast(`${modeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`, 'success'); setModeModal(null); load(page); }}
+        />
+      )}
       {modal && (
         <TransactionModal
           account={modal.account}
           action={modal.action}
+          paymentMethod={modal.paymentMethod}
           onClose={() => setModal(null)}
           onSuccess={handleSuccess}
         />
