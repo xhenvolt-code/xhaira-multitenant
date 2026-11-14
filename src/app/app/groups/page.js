@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Users, Plus, UserPlus, X } from 'lucide-react';
+import { Users, Plus, UserPlus, X, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
 import { useToast } from '@/components/ui/Toast';
@@ -12,6 +12,7 @@ export default function GroupsPage() {
   const [policy, setPolicy] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [activeGroup, setActiveGroup] = useState(null);
   const [groupMembers, setGroupMembers] = useState([]);
   const [candidates, setCandidates] = useState([]);
@@ -19,19 +20,32 @@ export default function GroupsPage() {
   const toast = useToast();
 
   const loadGroups = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
     try {
       const response = await fetchWithAuth('/api/groups');
       const result = await response.json();
       if (result.success) {
         setGroups(result.data || []);
         setPolicy(result.policy || {});
+      } else {
+        setGroups([]);
+        setLoadError(result.error || 'Could not load groups. Please try again.');
       }
+    } catch (error) {
+      setGroups([]);
+      setLoadError(error.message || 'Could not load groups. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
+  useEffect(() => {
+    const refresh = () => loadGroups();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [loadGroups]);
   const disabled = policy['groups.requirement'] === 'disabled';
 
   const refreshGroupMembers = async (group) => {
@@ -87,12 +101,20 @@ export default function GroupsPage() {
         <h1 className="text-2xl font-bold flex items-center gap-2"><Users className="w-6 h-6 text-blue-500" /> Groups</h1>
         <p className="text-sm text-muted-foreground mt-1">Groups follow your organization’s membership policy.</p>
       </div>
-      {!disabled && <button onClick={() => setShowForm((value) => !value)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-        <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : 'New Group'}
-      </button>}
+      <div className="flex items-center gap-2">
+        {!disabled && <button onClick={() => setShowForm((value) => !value)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+          <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : 'New Group'}
+        </button>}
+        <button onClick={loadGroups} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50" aria-label="Refresh groups">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+        </button>
+      </div>
     </header>
     {showForm && <MemberRegistrationForm memberKind="group" onDone={() => { setShowForm(false); loadGroups(); }} />}
-    {loading ? <p className="text-muted-foreground">Loading groups…</p> : groups.length === 0 ?
+    {loading ? <p className="text-muted-foreground">Loading groups…</p> : loadError ?
+      <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-8 text-center text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+        <p>{loadError}</p><button onClick={loadGroups} className="mt-3 text-sm underline">Retry</button>
+      </div> : groups.length === 0 ?
       <div className="rounded-xl border border-border bg-card p-10 text-center text-muted-foreground">No groups have been registered.</div> :
       <div className="rounded-xl border border-border bg-card divide-y divide-border">
         {groups.map((group) => <div key={group.id} className="p-4">
