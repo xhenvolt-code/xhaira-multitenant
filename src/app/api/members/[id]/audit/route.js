@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members/[id]/audit — Audit trail for a member
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const { searchParams } = new URL(request.url);
@@ -23,6 +25,7 @@ export async function GET(request, { params }) {
     );
 
     return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

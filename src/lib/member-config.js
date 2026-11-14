@@ -1,4 +1,4 @@
-import { query } from '@/lib/db.js';
+import { getPool, query } from '@/lib/db.js';
 import { getOrganizationContext, runWithOrganizationContext } from '@/lib/organization-context.js';
 export { validateMemberFields, getMissingRequiredMemberFields } from '@/lib/member-field-validation.js';
 
@@ -17,22 +17,25 @@ export async function ensureMemberConfigurationDefaults(organizationId = getOrga
   if (!organizationId) {
     throw new Error('An authenticated organization is required to load member configuration.');
   }
+  const client = await getPool().connect();
   try {
-    await runWithOrganizationContext(organizationId, async () => {
-      await query('SELECT public.seed_member_configuration_defaults($1::uuid)', [organizationId]);
-      await query(
-        `INSERT INTO member_field_configs
-          (organization_id, field_name, label, section, field_type, is_active, is_required, sort_order, options, validation_rules)
-         SELECT $1::uuid, field_name, label, section, field_type, is_active, is_required, sort_order, options, '{}'::jsonb
-           FROM jsonb_to_recordset($2::jsonb) AS f(
-             field_name text, label text, section text, field_type text, is_active boolean,
-             is_required boolean, sort_order integer, options jsonb
-           )
-         ON CONFLICT (organization_id, field_name) DO NOTHING`,
-        [organizationId, JSON.stringify(COMMON_MEMBER_FIELDS)]
-      );
-    });
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId]);
+    await client.query('SELECT public.seed_member_configuration_defaults($1::uuid)', [organizationId]);
+    await client.query(
+      `INSERT INTO member_field_configs
+        (organization_id, field_name, label, section, field_type, is_active, is_required, sort_order, options, validation_rules)
+       SELECT $1::uuid, field_name, label, section, field_type, is_active, is_required, sort_order, options, '{}'::jsonb
+         FROM jsonb_to_recordset($2::jsonb) AS f(
+           field_name text, label text, section text, field_type text, is_active boolean,
+           is_required boolean, sort_order integer, options jsonb
+         )
+       ON CONFLICT (organization_id, field_name) DO NOTHING`,
+      [organizationId, JSON.stringify(COMMON_MEMBER_FIELDS)]
+    );
+    await client.query('COMMIT');
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     if (error.code === '42883') {
       throw new Error('Database migration 957 is not applied. Run `npm run migrate:member-config` before using member and group registration.');
     }
@@ -40,6 +43,8 @@ export async function ensureMemberConfigurationDefaults(organizationId = getOrga
       throw new Error('Member configuration could not be loaded for your organization. Please sign in again and retry.');
     }
     throw error;
+  } finally {
+    await client.release();
   }
 }
 

@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members/[id] — Get member details with accounts
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -45,6 +47,7 @@ export async function GET(request, { params }) {
         accounts: accountsResult.rows,
       },
     });
+    });
   } catch (error) {
     console.error('[Members] GET detail error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -57,6 +60,7 @@ export async function PUT(request, { params }) {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
 
     const { id } = await params;
     const body = await request.json();
@@ -176,6 +180,7 @@ export async function PUT(request, { params }) {
     ).catch(() => {});
 
     return NextResponse.json({ success: true, data: member });
+    });
   } catch (error) {
     console.error('[Members] PUT error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -188,6 +193,7 @@ export async function DELETE(request, { params }) {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -207,6 +213,7 @@ export async function DELETE(request, { params }) {
     ).catch(() => {});
 
     return NextResponse.json({ success: true, data: result.rows[0] });
+    });
   } catch (error) {
     console.error('[Members] DELETE error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

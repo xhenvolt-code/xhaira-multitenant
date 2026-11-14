@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { v2 as cloudinary } from 'cloudinary';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +22,7 @@ export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const { id } = await params;
     const result = await query('SELECT * FROM member_documents WHERE id = $1', [id]);
     const document = result.rows[0];
@@ -47,6 +49,7 @@ export async function GET(request, { params }) {
         'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
       },
+    });
     });
   } catch (error) {
     console.error('[Member documents] Download failed:', error.message);

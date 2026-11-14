@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 function validValidationRules(rules) {
   if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return false;
@@ -30,12 +31,13 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    await ensureMemberConfigurationDefaults(perm.auth.organizationId);
-
-    const result = await query(
-      `SELECT * FROM member_field_configs ORDER BY section, sort_order, label`
-    );
-    return NextResponse.json({ success: true, data: result.rows });
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
+      await ensureMemberConfigurationDefaults(perm.auth.organizationId);
+      const result = await query(
+        `SELECT * FROM member_field_configs ORDER BY section, sort_order, label`
+      );
+      return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -49,6 +51,7 @@ export async function PUT(request) {
     if (perm.auth?.role !== 'superadmin') {
       return NextResponse.json({ success: false, error: 'Only the organization administrator can change member fields' }, { status: 403 });
     }
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const body = await request.json();
@@ -127,6 +130,7 @@ export async function PUT(request) {
 
     const result = await query(`SELECT * FROM member_field_configs ORDER BY section, sort_order`);
     return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

@@ -23,6 +23,24 @@ const POLICY_OPTIONS = {
   'groups.cardinality': [['one', 'One group per member'], ['many', 'Multiple groups per member']],
 };
 
+function getThresholdAmount(value) {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return parsed.trim() === '' ? '' : Number.isFinite(Number(parsed)) ? Number(parsed) : '';
+    }
+  }
+  if (parsed && typeof parsed === 'object') {
+    parsed = parsed.amount;
+    if (parsed && typeof parsed === 'object') return '';
+  }
+  if (parsed === '' || parsed === null || parsed === undefined) return '';
+  const amount = Number(parsed);
+  return Number.isFinite(amount) ? amount : '';
+}
+
 export default function SACCOConfigurationsPage() {
   const toast = useToast();
   const [configs, setConfigs] = useState([]);
@@ -46,14 +64,13 @@ export default function SACCOConfigurationsPage() {
 
   const getValue = (config) => {
     const key = config.config_key;
-    if (key in pendingChanges) return pendingChanges[key];
-    if (config.config_type === 'boolean') return config.config_value === true || config.config_value === 'true';
-    if (key === 'transfers.approval_threshold') {
-      const value = typeof config.config_value === 'string'
-        ? (() => { try { return JSON.parse(config.config_value); } catch { return config.config_value; } })()
-        : config.config_value;
-      return value && typeof value === 'object' ? value.amount ?? '' : value ?? '';
+    if (key in pendingChanges) {
+      return key === 'transfers.approval_threshold'
+        ? getThresholdAmount(pendingChanges[key])
+        : pendingChanges[key];
     }
+    if (config.config_type === 'boolean') return config.config_value === true || config.config_value === 'true';
+    if (key === 'transfers.approval_threshold') return getThresholdAmount(config.config_value);
     return config.config_value ?? '';
   };
 

@@ -1,16 +1,19 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
-    const { id } = await params;
-    const result = await query(`SELECT m.id, m.full_name, m.membership_number, m.status
-      FROM member_group_links l JOIN members m ON m.id = l.member_id
-      WHERE l.group_id = $1 ORDER BY m.full_name`, [id]);
-    return NextResponse.json({ success: true, data: result.rows });
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
+      const { id } = await params;
+      const result = await query(`SELECT m.id, m.full_name, m.membership_number, m.status
+        FROM member_group_links l JOIN members m ON m.id = l.member_id
+        WHERE l.group_id = $1 ORDER BY m.full_name`, [id]);
+      return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -20,6 +23,7 @@ export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const { id } = await params;
     const { member_id: memberId } = await request.json();
     if (!memberId) return NextResponse.json({ success: false, error: 'member_id is required' }, { status: 400 });
@@ -47,6 +51,7 @@ export async function POST(request, { params }) {
       await client.query('ROLLBACK');
       throw error;
     } finally { await client.release(); }
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: error.message.includes('only one group') ? 409 : 500 });
   }
@@ -56,6 +61,7 @@ export async function DELETE(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const { id } = await params;
     const { member_id: memberId } = await request.json();
     if (!memberId) return NextResponse.json({ success: false, error: 'member_id is required' }, { status: 400 });
@@ -70,6 +76,7 @@ export async function DELETE(request, { params }) {
     const result = await query(`DELETE FROM member_group_links WHERE group_id = $1 AND member_id = $2 RETURNING id`, [id, memberId]);
     if (!result.rows[0]) return NextResponse.json({ success: false, error: 'Group membership was not found' }, { status: 404 });
     return NextResponse.json({ success: true });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

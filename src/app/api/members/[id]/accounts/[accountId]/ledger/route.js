@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members/[id]/accounts/[accountId]/ledger — Ledger entries for a member account
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id, accountId } = await params;
 
@@ -55,6 +57,7 @@ export async function GET(request, { params }) {
       balance: parseFloat(balanceResult.rows[0]?.balance || 0),
       data: entriesResult.rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
     });
   } catch (error) {
     console.error('[Account Ledger] GET error:', error.message);

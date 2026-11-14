@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { ensureMemberConfigurationDefaults, getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members — List all SACCO members
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     await ensureMemberConfigurationDefaults(perm.auth.organizationId);
 
     const { searchParams } = new URL(request.url);
@@ -70,6 +72,7 @@ export async function GET(request) {
       data: members,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
+    });
   } catch (error) {
     console.error('[Members] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -82,6 +85,7 @@ export async function POST(request) {
     const perm = await requirePermission(request, 'members.create');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
 
     const body = await request.json();
     const {
@@ -234,6 +238,7 @@ export async function POST(request) {
     }
 
     return NextResponse.json({ success: true, data: member }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Members] POST error:', error.message);
     if (error.message.includes('idx_members_national_id') || error.message.includes('idx_members_email_unique')) {

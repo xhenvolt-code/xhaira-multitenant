@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/members/[id]/accounts — List accounts for a member
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -26,6 +28,7 @@ export async function GET(request, { params }) {
       data: accounts.rows,
       member: member.rows[0],
     });
+    });
   } catch (error) {
     console.error('[Member Accounts] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -37,6 +40,7 @@ export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const body = await request.json();
@@ -91,6 +95,7 @@ export async function POST(request, { params }) {
     );
 
     return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Member Accounts] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

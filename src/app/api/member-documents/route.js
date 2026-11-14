@@ -4,6 +4,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { ensureMemberConfigurationDefaults } from '@/lib/member-config.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
 const ALLOWED_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -37,6 +38,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     await ensureMemberConfigurationDefaults(perm.auth.organizationId);
     const form = await request.formData();
     const file = form.get('file');
@@ -84,6 +86,7 @@ export async function POST(request) {
     await query('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)',
       [perm.auth.userId, 'UPLOAD', 'member_document', saved.rows[0].id, JSON.stringify({ member_id: memberId, document_key: documentKey })]);
     return NextResponse.json({ success: true, data: saved.rows[0] }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Member documents] Upload failed:', error.message);
     return NextResponse.json({ success: false, error: error.message || 'Upload failed' }, { status: 500 });
@@ -95,6 +98,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'members.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const memberId = new URL(request.url).searchParams.get('member_id');
     if (!memberId) return NextResponse.json({ success: false, error: 'member_id is required' }, { status: 400 });
     const result = await query('SELECT * FROM member_documents WHERE member_id = $1 ORDER BY uploaded_at DESC', [memberId]);
@@ -104,6 +108,7 @@ export async function GET(request) {
         original_filename: document.original_filename, mime_type: document.mime_type, file_size: document.file_size,
         uploaded_at: document.uploaded_at, download_url: `/api/member-documents/${document.id}/download` }));
     return NextResponse.json({ success: true, data });
+    });
   } catch (error) {
     console.error('[Member documents] Read failed:', error.message);
     return NextResponse.json({ success: false, error: error.message || 'Failed to fetch documents' }, { status: 500 });
