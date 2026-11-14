@@ -62,6 +62,7 @@ export default function MemberDetailPage() {
   const [uploadingDocument, setUploadingDocument] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [memberLoadError, setMemberLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('Profile');
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -84,6 +85,8 @@ export default function MemberDetailPage() {
   const [auditLoading, setAuditLoading] = useState(false);
 
   const fetchData = async () => {
+    setLoading(true);
+    setMemberLoadError('');
     try {
       const [memberRes, accountsRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
         fetchWithAuth(`/api/members/${id}`),
@@ -100,6 +103,13 @@ export default function MemberDetailPage() {
       if (fieldsJson.success) setMemberFields(fieldsJson.data || []);
       const docsJson = await docsRes.json();
       const docConfigsJson = await docConfigsRes.json();
+      if (!memberJson.success) {
+        setMemberLoadError(memberRes._status === 404
+          ? 'Member not found or you do not have access to it.'
+          : memberJson.error || 'Could not load this member. Please try again.');
+        setMember(null);
+        return;
+      }
       if (docsJson.success) setMemberDocuments(docsJson.data || []);
       if (docConfigsJson.success) {
         const enabled = (docConfigsJson.data || []).filter((item) => item.is_enabled);
@@ -143,6 +153,7 @@ export default function MemberDetailPage() {
       }
     } catch (err) {
       console.error(err);
+      setMemberLoadError(err.message || 'Could not load this member. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -299,7 +310,10 @@ export default function MemberDetailPage() {
   };
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
-  if (!member) return <div className="p-6 text-center text-muted-foreground">Member not found</div>;
+  if (!member) return <div className="p-6 text-center text-muted-foreground">
+    <p>{memberLoadError || 'Member not found or you do not have access to it.'}</p>
+    {memberLoadError && <button type="button" onClick={fetchData} className="mt-3 text-blue-600 underline">Try again</button>}
+  </div>;
 
   const totalBalance = accounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
   const inputClass = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring';

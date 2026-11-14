@@ -15,23 +15,37 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
   const [groupRequirement, setGroupRequirement] = useState('optional');
   const [groupNature, setGroupNature] = useState('member_type');
   const [saving, setSaving] = useState(false);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+  const [configError, setConfigError] = useState('');
 
-  useEffect(() => {
-    Promise.all([
-      fetchWithAuth('/api/member-field-configs').then((response) => response.json()),
-      fetchWithAuth('/api/groups').then((response) => response.json()),
-    ]).then(([fieldResult, groupResult]) => {
-      if (fieldResult.success) setFields(fieldResult.data.filter((field) => field.is_active && !CORE.has(field.field_name)));
-      if (groupResult.success) setGroups(groupResult.data || []);
+  const loadFormConfig = async () => {
+    setLoadingConfig(true);
+    setConfigError('');
+    try {
+      const [fieldResult, groupResult] = await Promise.all([
+        fetchWithAuth('/api/member-field-configs'),
+        fetchWithAuth('/api/groups'),
+      ]);
+      if (!fieldResult.success) throw new Error(fieldResult.error || 'Could not load the member registration fields.');
+      if (!groupResult.success) throw new Error(groupResult.error || 'Could not load group registration settings.');
+      setFields((fieldResult.data || []).filter((field) => field.is_active && !CORE.has(field.field_name)));
+      setGroups(groupResult.data || []);
       if (groupResult.policy) {
         setGroupRequirement(groupResult.policy['groups.requirement'] ?? 'optional');
         setGroupNature(groupResult.policy['groups.nature'] ?? 'member_type');
       }
-    }).catch(() => {});
-  }, []);
+    } catch (error) {
+      setConfigError(error.message || 'Could not load registration settings.');
+    } finally {
+      setLoadingConfig(false);
+    }
+  };
+
+  useEffect(() => { loadFormConfig(); }, []);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loadingConfig || configError) return;
     setSaving(true);
     try {
       const isSuborganizationGroup = memberKind === 'group' && groupNature === 'sub_organization';
@@ -87,6 +101,10 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
 
   return <form onSubmit={handleSubmit} className="bg-card border border-border rounded-xl p-6 space-y-4">
     <h2 className="text-lg font-semibold text-foreground">{memberKind === 'group' ? 'Register Group' : 'Register New Member'}</h2>
+    {configError && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+      <span>{configError}</span>
+      <button type="button" onClick={loadFormConfig} className="shrink-0 underline">Retry</button>
+    </div>}
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <div>
         <label htmlFor="member-full-name" className="block text-xs font-medium text-muted-foreground mb-1">
@@ -106,8 +124,8 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
         </select>
       </div>}
     </div>
-    <button type="submit" disabled={saving} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
-      {saving ? 'Saving...' : memberKind === 'group' ? 'Register Group' : 'Register Member'}
+    <button type="submit" disabled={saving || loadingConfig || Boolean(configError)} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+      {saving ? 'Saving...' : loadingConfig ? 'Loading registration fields...' : memberKind === 'group' ? 'Register Group' : 'Register Member'}
     </button>
   </form>;
 }
