@@ -72,7 +72,7 @@ export async function POST(request, { params }) {
     }
     const resolvedTypeId = selectedType.rows[0].id;
     const typeCode = selectedType.rows[0].code;
-    const accountTypeByCode = { VOL_SAV: 'savings', FIXED_SAV: 'fixed_deposit', SHARES: 'shares', LOAN_ACC: 'loan', INVEST: 'investment' };
+    const accountTypeByCode = { VOL_SAV: 'savings', FIXED_SAV: 'fixed_deposit', FIXED_DEP: 'fixed_deposit', SHARES: 'shares', LOAN_ACC: 'loan', INVEST: 'investment' };
     const resolvedAccountType = accountTypeByCode[typeCode] || String(typeCode).toLowerCase();
 
     // Generate account number: ACC-TYPE-RANDOM

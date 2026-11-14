@@ -11,6 +11,7 @@
     "test:tenant-isolation": "node scripts/test-tenant-configuration-isolation.mjs",
     "migrate:member-config": "node scripts/run-member-configuration-migration.mjs",
     "migrate:member-defaults": "node scripts/run-member-configuration-migration.mjs --defaults",
+    "migrate:account-type-compat": "node scripts/run-member-configuration-migration.mjs --account-types",
     "check:contrast": "node --input-type=module < scripts/check-contrast.js"
   },
   "dependencies": {
