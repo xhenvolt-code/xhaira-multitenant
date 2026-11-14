@@ -24,7 +24,7 @@ import {
 } from '@/lib/auth.js';
 import { logAuthEvent, extractRequestMetadata } from '@/lib/audit.js';
 import { createSession, getSecureCookieOptions } from '@/lib/session.js';
-import { query } from '@/lib/db.js';
+import { query, isDatabaseConnectionError } from '@/lib/db.js';
 import { enterOrganizationContext } from '@/lib/organization-context.js';
 
 /**
@@ -172,7 +172,16 @@ export async function POST(request) {
 
     return response;
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('Registration error:', error?.message || error);
+    if (isDatabaseConnectionError(error)) {
+      return NextResponse.json(
+        {
+          error: 'Registration service is temporarily unavailable. Check the database connection configuration.',
+          code: 'DATABASE_UNAVAILABLE',
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       {
         error: 'Registration failed',

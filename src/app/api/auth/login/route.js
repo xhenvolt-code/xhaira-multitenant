@@ -3,7 +3,7 @@ import { validateLogin } from '@/lib/validation.js';
 import { verifyCredentials, updateUserLastLogin } from '@/lib/auth.js';
 import { logAuthEvent, extractRequestMetadata } from '@/lib/audit.js';
 import { createSession, getSecureCookieOptions } from '@/lib/session.js';
-import { query } from '@/lib/db.js';
+import { query, isDatabaseConnectionError } from '@/lib/db.js';
 import { enterOrganizationContext } from '@/lib/organization-context.js';
 
 /**
@@ -191,7 +191,13 @@ export async function POST(request) {
 
     return response;
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('Login error:', error?.message || error);
+    if (isDatabaseConnectionError(error)) {
+      return NextResponse.json(
+        { error: 'Authentication service is temporarily unavailable. Check the database connection configuration.' },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

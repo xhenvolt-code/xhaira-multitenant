@@ -4,7 +4,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { query } from './db.js';
+import { query, isDatabaseConnectionError } from './db.js';
 
 const SALT_ROUNDS = 10;
 
@@ -38,6 +38,9 @@ export async function findUserByEmail(email) {
     return result.rows[0] || null;
   } catch (error) {
     console.error('Error finding user by email:', error.message);
+    // A failed DB connection is not the same as an email with no account.
+    // Let the route return a service error instead of a misleading 401.
+    if (isDatabaseConnectionError(error)) throw error;
     return null;
   }
 }
@@ -207,6 +210,7 @@ export async function verifyCredentials(email, password) {
     return userWithoutPassword;
   } catch (error) {
     console.error('Error verifying credentials:', error.message);
+    if (isDatabaseConnectionError(error)) throw error;
     return null;
   }
 }

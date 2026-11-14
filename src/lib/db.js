@@ -4,6 +4,18 @@ import { getOrganizationContext } from './organization-context.js';
 
 const { Pool } = pg;
 
+const DATABASE_CONNECTION_ERROR_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+  '28P01', // invalid database password
+  '3D000', // database does not exist
+  '08000', '08001', '08003', '08004', '08006', '08007', '08P01',
+]);
+
+export function isDatabaseConnectionError(error) {
+  return DATABASE_CONNECTION_ERROR_CODES.has(error?.code) ||
+    /DATABASE_URL/.test(error?.message || '');
+}
+
 /**
  * PostgreSQL Connection Pool
  * Supports both local development and serverless environments (Neon)
@@ -27,7 +39,25 @@ function initializePool() {
     throw new Error('DATABASE_URL environment variable is not set');
   }
 
+  // Fail fast on common copy/paste placeholders. Without this check, `base`
+  // is treated as a real hostname and each retry waits for DNS to time out.
+  let databaseUrl;
+  try {
+    databaseUrl = new URL(connectionString);
+  } catch {
+    throw new Error('DATABASE_URL is not a valid PostgreSQL connection URL');
+  }
+  if (!['postgres:', 'postgresql:'].includes(databaseUrl.protocol) || !databaseUrl.hostname) {
+    throw new Error('DATABASE_URL must use postgres:// or postgresql:// and include a database host');
+  }
+  if (databaseUrl.hostname.toLowerCase() === 'base') {
+    throw new Error('DATABASE_URL host is "base" (a placeholder). Set it to the Neon endpoint hostname from the connection string.');
+  }
+
   poolInitAttempts++;
+
+  // Safe to log: hostname only, never username, password, database, or query parameters.
+  console.info(`[Database] Initializing PostgreSQL pool for host ${databaseUrl.hostname}`);
 
   pool = new Pool({
     connectionString,
@@ -67,7 +97,7 @@ function initializePool() {
  * @param {number} retries - Number of retries on failure
  * @returns {Promise<any>} Query result
  */
-export async function query(query, params = [], retries = 2) {
+export async function query(query, params = [], retries = 0) {
   let lastError;
   
   for (let attempt = 0; attempt <= retries; attempt++) {
