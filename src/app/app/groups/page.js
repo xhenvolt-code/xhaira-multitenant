@@ -5,6 +5,7 @@ import { Users, Plus, UserPlus, X } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
 import { useToast } from '@/components/ui/Toast';
+import Link from 'next/link';
 
 export default function GroupsPage() {
   const [groups, setGroups] = useState([]);
@@ -99,6 +100,7 @@ export default function GroupsPage() {
             <div className="font-medium">{group.full_name}</div>
             <div className="flex items-center gap-3">
               <span className="text-sm text-muted-foreground">{group.member_count || 0} members</span>
+              <Link href={`/app/groups/${group.id}`} className="text-sm text-blue-600 hover:underline">Open group</Link>
               {!disabled && ['sub_organization', 'both'].includes(policy['groups.nature']) && <button onClick={() => manageGroup(group)} className="text-sm text-blue-600 hover:underline">{activeGroup?.id === group.id ? 'Close' : 'Manage members'}</button>}
             </div>
           </div>

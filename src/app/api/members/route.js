@@ -19,7 +19,9 @@ export async function GET(request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
+    let where = `WHERE (m.member_kind <> 'group' OR EXISTS (
+      SELECT 1 FROM member_groups registered_group WHERE registered_group.group_member_id = m.id
+    ))`;
     const params = [];
     const groupPolicyResult = await query(`SELECT config_key, config_value FROM sacco_configurations
       WHERE config_key IN ('groups.requirement', 'groups.nature')`);

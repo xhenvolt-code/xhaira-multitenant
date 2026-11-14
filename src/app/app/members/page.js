@@ -18,11 +18,14 @@ const STATUS_STYLES = {
 export default function MembersPage() {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
 
   const fetchMembers = async () => {
+    setLoading(true);
+    setLoadError('');
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
@@ -30,8 +33,14 @@ export default function MembersPage() {
       const res = await fetchWithAuth(`/api/members?${params}`);
       const json = await res.json();
       if (json.success) setMembers(json.data || []);
+      else {
+        setMembers([]);
+        setLoadError(json.error || 'Could not load members. Please try again.');
+      }
     } catch (err) {
       console.error('Failed to fetch members:', err);
+      setMembers([]);
+      setLoadError('Could not load members. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -100,6 +109,11 @@ export default function MembersPage() {
       {/* Members Table */}
       {loading ? (
         <div className="text-center py-12 text-muted-foreground">Loading members...</div>
+      ) : loadError ? (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-8 text-center text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+          <p>{loadError}</p>
+          <button onClick={fetchMembers} className="mt-3 text-sm underline">Retry</button>
+        </div>
       ) : members.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center">
           <Users className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
