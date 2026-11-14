@@ -32,16 +32,23 @@ export async function GET(request) {
                        FROM staff_roles sr2
                        JOIN roles sr_r ON sr2.role_id = sr_r.id
                        LEFT JOIN departments sr_d ON sr_r.department_id = sr_d.id
-                       WHERE sr2.staff_id = s.id) AS assigned_roles
+                       WHERE sr2.staff_id = s.id
+                         AND sr2.organization_id = s.organization_id) AS assigned_roles
                FROM staff s
-               LEFT JOIN staff m ON s.manager_id = m.id
-               LEFT JOIN accounts a ON s.salary_account_id = a.id
+               LEFT JOIN staff m ON s.manager_id = m.id AND m.organization_id = s.organization_id
+               LEFT JOIN accounts a ON s.salary_account_id = a.id AND a.organization_id = s.organization_id
                LEFT JOIN roles r ON s.role_id = r.id
-               LEFT JOIN departments d ON s.department_id = d.id
-               LEFT JOIN users u ON s.user_id = u.id OR (s.email IS NOT NULL AND s.email = u.email)
-               LEFT JOIN user_presence up ON u.id = up.user_id
-               WHERE 1=1`;
-    const params = [];
+               LEFT JOIN departments d ON s.department_id = d.id AND d.organization_id = s.organization_id
+               LEFT JOIN users u
+                 ON u.organization_id = s.organization_id
+                AND (
+                  u.id = COALESCE(s.linked_user_id, s.user_id)
+                  OR (s.linked_user_id IS NULL AND s.user_id IS NULL AND s.email IS NOT NULL AND LOWER(s.email) = LOWER(u.email))
+                )
+               LEFT JOIN user_presence up ON u.id = up.user_id AND up.organization_id = u.organization_id
+               WHERE s.organization_id = $1
+                 AND (COALESCE(s.linked_user_id, s.user_id) IS NULL OR u.id IS NOT NULL)`;
+    const params = [perm.auth.organizationId];
     if (department) { params.push(department); sql += ` AND (s.department = $${params.length} OR d.name = $${params.length})`; }
     if (status) { params.push(status); sql += ` AND s.status = $${params.length}`; }
     sql += ` ORDER BY s.joined_at DESC NULLS LAST, s.created_at DESC`;

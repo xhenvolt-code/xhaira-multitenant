@@ -31,9 +31,10 @@ export async function GET(request) {
           ELSE 'offline'
         END AS status
       FROM user_presence up
-      JOIN users u ON up.user_id = u.id
+      JOIN users u ON up.user_id = u.id AND u.organization_id = up.organization_id
+      WHERE up.organization_id = $1
       ORDER BY up.last_ping DESC
-    `);
+    `, [auth.organizationId]);
 
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {

@@ -199,10 +199,11 @@ export default function StaffPage() {
       const j = await res.json();
       if (j.success) {
         const data = j.data || [];
-        // Build presence map from staff data (presence_status is included)
+        // Match presence to the linked account ID, never by email across tenants.
         const pMap = {};
         data.forEach(s => {
-          if (s.email) pMap[s.email] = { status: s.presence_status || 'offline', last_seen_at: s.last_seen_at };
+          const userId = s.linked_user_id || s.user_id;
+          if (userId) pMap[userId] = { status: s.presence_status || 'offline', last_seen_at: s.last_seen_at };
         });
         setPresenceMap(prev => ({ ...prev, ...pMap }));
         setStaff(data);
@@ -217,7 +218,7 @@ export default function StaffPage() {
       const j = await res.json();
       if (j.success && j.data) {
         const pMap = {};
-        j.data.forEach(p => { if (p.email) pMap[p.email] = { status: p.status, last_seen_at: p.last_seen }; });
+        j.data.forEach(p => { if (p.user_id) pMap[p.user_id] = { status: p.status, last_seen_at: p.last_seen }; });
         setPresenceMap(pMap);
       }
     } catch {}
@@ -346,7 +347,8 @@ export default function StaffPage() {
   };
 
   const getPresence = (s) => {
-    if (s.email && presenceMap[s.email]) return presenceMap[s.email].status;
+    const userId = s.linked_user_id || s.user_id;
+    if (userId && presenceMap[userId]) return presenceMap[userId].status;
     return s.presence_status || 'offline';
   };
 

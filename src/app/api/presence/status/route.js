@@ -39,8 +39,8 @@ export async function GET(request) {
              ELSE 'offline'
            END AS status
          FROM user_presence
-         WHERE user_id = $1`,
-        [userId]
+         WHERE user_id = $1 AND organization_id = $2`,
+        [userId, auth.organizationId]
       );
 
       if (!rows.length) {
@@ -70,9 +70,11 @@ export async function GET(request) {
            ELSE 'offline'
          END AS status
        FROM user_presence up
-       JOIN users u ON u.id = up.user_id
+       JOIN users u ON u.id = up.user_id AND u.organization_id = up.organization_id
+       WHERE up.organization_id = $1
        ORDER BY up.last_ping DESC
-       LIMIT 100`
+       LIMIT 100`,
+      [auth.organizationId]
     );
 
     return NextResponse.json({ users: rows });
