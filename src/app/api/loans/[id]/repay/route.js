@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { repayLoan } from '@/lib/loan-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // POST /api/loans/[id]/repay
 export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const body = await request.json();
@@ -16,8 +18,9 @@ export async function POST(request, { params }) {
       return NextResponse.json({ success: false, error: 'Amount must be positive' }, { status: 400 });
     }
 
-    const result = await repayLoan({ loanId: id, amount: parseFloat(amount), userId: perm.userId });
+    const result = await repayLoan({ loanId: id, amount: parseFloat(amount), userId: perm.auth.userId });
     return NextResponse.json({ success: true, data: result });
+    });
   } catch (error) {
     console.error('[Loan Repay] error:', error.message);
     const status = error.message.includes('not found') ? 404

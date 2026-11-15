@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { applyForLoan } from '@/lib/loan-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/loans — List loans with filters
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || '';
@@ -59,6 +61,7 @@ export async function GET(request) {
       data: dataResult.rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
+    });
   } catch (error) {
     console.error('[Loans] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -70,6 +73,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
     const { member_id, product_id, member_account_id, principal, guarantors } = body;
@@ -87,10 +91,11 @@ export async function POST(request) {
       memberAccountId: member_account_id || null,
       principal: parseFloat(principal),
       guarantors: guarantors || [],
-      userId: perm.userId,
+      userId: perm.auth.userId,
     });
 
     return NextResponse.json({ success: true, data: result }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Loans] POST error:', error.message);
     const status = error.message.includes('not found') ? 404

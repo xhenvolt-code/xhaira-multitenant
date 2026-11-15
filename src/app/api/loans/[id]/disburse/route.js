@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { disburseLoan } from '@/lib/loan-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // POST /api/loans/[id]/disburse
 // Body (optional): { amount: number } for partial disbursement
@@ -8,6 +9,7 @@ export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -19,8 +21,9 @@ export async function POST(request, { params }) {
       // No body = full disbursement
     }
 
-    const result = await disburseLoan({ loanId: id, amount, userId: perm.userId });
+    const result = await disburseLoan({ loanId: id, amount, userId: perm.auth.userId });
     return NextResponse.json({ success: true, data: result });
+    });
   } catch (error) {
     console.error('[Loan Disburse] error:', error.message);
     const status = error.message.includes('not found') ? 404

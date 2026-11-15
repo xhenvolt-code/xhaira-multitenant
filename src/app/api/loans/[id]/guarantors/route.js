@@ -1,16 +1,19 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { getLoanGuarantors, addGuarantor, removeGuarantor } from '@/lib/loan-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/loans/[id]/guarantors — List guarantors for a loan
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const guarantors = await getLoanGuarantors(id);
     return NextResponse.json({ success: true, data: guarantors });
+    });
   } catch (error) {
     console.error('[Guarantors] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -22,6 +25,7 @@ export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const body = await request.json();
@@ -38,10 +42,11 @@ export async function POST(request, { params }) {
       loanId: id,
       guarantorMemberId: guarantor_member_id,
       guaranteedAmount: parseFloat(guaranteed_amount),
-      userId: perm.userId,
+      userId: perm.auth.userId,
     });
 
     return NextResponse.json({ success: true, data: result }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Guarantors] POST error:', error.message);
     const status = error.message.includes('not found') ? 404
@@ -56,6 +61,7 @@ export async function DELETE(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
     const body = await request.json();
@@ -67,6 +73,7 @@ export async function DELETE(request, { params }) {
 
     const result = await removeGuarantor({ loanId: id, guarantorId: guarantor_id });
     return NextResponse.json({ success: true, data: result });
+    });
   } catch (error) {
     const status = error.message.includes('not found') ? 404 : error.message.includes('only remove') ? 400 : 500;
     return NextResponse.json({ success: false, error: error.message }, { status });

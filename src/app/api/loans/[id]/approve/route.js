@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { approveLoan } from '@/lib/loan-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // POST /api/loans/[id]/approve
 // Body (optional): { approved_amount: number }
@@ -8,6 +9,7 @@ export async function POST(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -19,8 +21,9 @@ export async function POST(request, { params }) {
       // No body is fine — approves full principal
     }
 
-    const result = await approveLoan({ loanId: id, approvedAmount, userId: perm.userId });
+    const result = await approveLoan({ loanId: id, approvedAmount, userId: perm.auth.userId });
     return NextResponse.json({ success: true, data: result });
+    });
   } catch (error) {
     console.error('[Loan Approve] error:', error.message);
     const status = error.message.includes('not found') ? 404

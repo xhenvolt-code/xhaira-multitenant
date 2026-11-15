@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/loans/[id] — Loan detail with schedule, guarantors, disbursement info
 export async function GET(request, { params }) {
@@ -8,6 +9,7 @@ export async function GET(request, { params }) {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -49,6 +51,7 @@ export async function GET(request, { params }) {
         schedule: scheduleResult.rows,
         guarantors: guarantorResult.rows,
       },
+    });
     });
   } catch (error) {
     console.error('[Loan Detail] GET error:', error.message);

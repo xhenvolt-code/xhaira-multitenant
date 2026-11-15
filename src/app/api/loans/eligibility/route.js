@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { checkLoanEligibility } from '@/lib/rule-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/loans/eligibility?member_id=xxx&amount=1000000
 // Check loan eligibility for a member before applying
@@ -8,6 +9,7 @@ export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const memberId = searchParams.get('member_id');
@@ -19,6 +21,7 @@ export async function GET(request) {
 
     const result = await checkLoanEligibility(memberId, amount ? parseFloat(amount) : null);
     return NextResponse.json({ success: true, data: result });
+    });
   } catch (error) {
     console.error('[Loan Eligibility] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
