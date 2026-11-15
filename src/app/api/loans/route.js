@@ -100,6 +100,7 @@ export async function POST(request) {
     console.error('[Loans] POST error:', error.message);
     const status = error.message.includes('not found') ? 404
       : error.message.includes('not active') || error.message.includes('Guarantor') ? 400
+      : /guarantor/i.test(error.message) ? 400
       : error.message.includes('below minimum') || error.message.includes('exceeds maximum') ? 400
       : 500;
     return NextResponse.json({ success: false, error: error.message }, { status });

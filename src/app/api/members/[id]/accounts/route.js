@@ -11,16 +11,26 @@ export async function GET(request, { params }) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
+    const { searchParams } = new URL(request.url);
+    const activeOnly = searchParams.get('active_only') === 'true';
 
     // Verify member exists
-    const member = await query(`SELECT id, full_name FROM members WHERE id = $1`, [id]);
+    const member = await query(
+      `SELECT id, full_name FROM members WHERE id = $1 AND organization_id = $2`,
+      [id, perm.auth.organizationId]
+    );
     if (member.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
 
     const accounts = await query(
-      `SELECT vb.* FROM v_member_account_balances vb WHERE vb.member_id = $1 ORDER BY vb.opened_at DESC`,
-      [id]
+      `SELECT vb.*
+         FROM v_member_account_balances vb
+         JOIN member_accounts ma ON ma.id = vb.member_account_id
+        WHERE vb.member_id = $1 AND ma.organization_id = $2
+          ${activeOnly ? `AND vb.status = 'active'` : ''}
+        ORDER BY vb.opened_at DESC`,
+      [id, perm.auth.organizationId]
     );
 
     return NextResponse.json({

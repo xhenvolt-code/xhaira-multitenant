@@ -132,16 +132,51 @@ export async function applyForLoan({ memberId, productId, memberAccountId, princ
 
     // Validate guarantors if provided
     const guarantorRule = await getRule('LOAN', 'guarantors_required');
-    const requiredGuarantors = guarantorRule?.count || 0;
+    const requiredGuarantors = Number(guarantorRule?.count) || 0;
     const validatedGuarantors = [];
+    const requestedGuarantors = Array.isArray(guarantors) ? guarantors : [];
+    if (requestedGuarantors.length < requiredGuarantors) {
+      throw new Error(`Loan requires at least ${requiredGuarantors} guarantor${requiredGuarantors === 1 ? '' : 's'}`);
+    }
+    const guarantorIds = requestedGuarantors.map((guarantor) => guarantor.guarantor_member_id);
+    if (new Set(guarantorIds).size !== guarantorIds.length) {
+      throw new Error('A member cannot be selected as a guarantor more than once');
+    }
 
-    if (guarantors && guarantors.length > 0) {
-      for (const g of guarantors) {
+    if (requestedGuarantors.length > 0) {
+      for (const g of requestedGuarantors) {
+        const guaranteedAmount = Number(g.guaranteed_amount);
+        if (!g.guarantor_member_id || !Number.isFinite(guaranteedAmount) || guaranteedAmount <= 0) {
+          throw new Error('Each guarantor must have a valid member and guaranteed amount');
+        }
+        const sameGroup = await client.query(
+          `SELECT 1
+             FROM member_group_links guarantor_link
+             JOIN members guarantor
+               ON guarantor.id = guarantor_link.member_id
+              AND guarantor.status = 'active'
+              AND guarantor.member_kind = 'individual'
+            WHERE guarantor_link.member_id = $1
+              AND guarantor_link.group_id IN (
+                SELECT applicant_link.group_id
+                  FROM member_group_links applicant_link
+                 WHERE applicant_link.member_id = $2
+                UNION
+                SELECT applicant_group.id
+                  FROM member_groups applicant_group
+                 WHERE applicant_group.group_member_id = $2
+              )
+            LIMIT 1`,
+          [g.guarantor_member_id, memberId]
+        );
+        if (!sameGroup.rows[0]) {
+          throw new Error("Guarantors must be active individual members of the loan applicant's group");
+        }
         const validation = await validateGuarantor(g.guarantor_member_id, g.guaranteed_amount, memberId);
         if (!validation.valid) {
           throw new Error(`Guarantor validation failed: ${validation.issues.join(', ')}`);
         }
-        validatedGuarantors.push(g);
+        validatedGuarantors.push({ ...g, guaranteed_amount: guaranteedAmount });
       }
     }
 

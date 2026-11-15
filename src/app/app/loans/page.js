@@ -31,9 +31,21 @@ export default function LoansPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [members, setMembers] = useState([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberSuggestions, setMemberSuggestions] = useState([]);
+  const [memberSearchLoading, setMemberSearchLoading] = useState(false);
+  const [memberSearchError, setMemberSearchError] = useState('');
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [products, setProducts] = useState([]);
   const [memberAccounts, setMemberAccounts] = useState([]);
+  const [memberAccountsLoading, setMemberAccountsLoading] = useState(false);
+  const [memberAccountsError, setMemberAccountsError] = useState('');
+  const [guarantorSearch, setGuarantorSearch] = useState('');
+  const [guarantorCandidates, setGuarantorCandidates] = useState([]);
+  const [guarantorSearchLoading, setGuarantorSearchLoading] = useState(false);
+  const [guarantorSearchError, setGuarantorSearchError] = useState('');
+  const [requiredGuarantors, setRequiredGuarantors] = useState(0);
+  const [selectedGuarantors, setSelectedGuarantors] = useState([]);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
 
@@ -57,41 +69,210 @@ export default function LoansPage() {
 
   useEffect(() => { fetchLoans(); }, [statusFilter]);
 
-  // Fetch members and products when form opens
+  // Load loan products when the application form opens.
   useEffect(() => {
     if (!showForm) return;
-    Promise.all([
-      fetchWithAuth('/api/members?limit=200').then(r => r.json()),
-      fetchWithAuth('/api/sacco-products?type=LOAN&active=true').then(r => r.json()),
-    ]).then(([membersJson, productsJson]) => {
-      if (membersJson.success) setMembers(membersJson.data || []);
-      if (productsJson.success) setProducts(productsJson.data || []);
-    });
+    fetchWithAuth('/api/sacco-products?type=LOAN&active=true')
+      .then(result => {
+        if (!result.success) throw new Error(result.error || 'Could not load loan products.');
+        setProducts(result.data || []);
+      })
+      .catch(error => toast.error(error.message || 'Could not load loan products.'));
   }, [showForm]);
 
-  // Fetch member accounts when member selected
+  // Search members on demand instead of loading a capped list of every member.
   useEffect(() => {
-    if (!form.member_id) { setMemberAccounts([]); return; }
-    fetchWithAuth(`/api/members/${form.member_id}/accounts`).then(r => r.json()).then(json => {
-      if (json.success) setMemberAccounts(json.data || []);
-    });
+    const search = memberSearch.trim();
+    if (!showForm || search.length < 2 || form.member_id) {
+      setMemberSuggestions([]);
+      setMemberSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setMemberSearchLoading(true);
+      setMemberSearchError('');
+      try {
+        const result = await fetchWithAuth(
+          `/api/members/search?search=${encodeURIComponent(search)}`,
+          { signal: controller.signal }
+        );
+        if (!result.success) throw new Error(result.error || 'Could not search members.');
+        setMemberSuggestions(result.data || []);
+        setActiveSuggestion(-1);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setMemberSuggestions([]);
+          setMemberSearchError(error.message || 'Could not search members.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setMemberSearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [showForm, memberSearch, form.member_id]);
+
+  // Load active disbursement accounts for the selected member.
+  useEffect(() => {
+    if (!form.member_id) {
+      setMemberAccounts([]);
+      setMemberAccountsLoading(false);
+      setMemberAccountsError('');
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadAccounts = async () => {
+      setMemberAccounts([]);
+      setMemberAccountsLoading(true);
+      setMemberAccountsError('');
+      try {
+        const result = await fetchWithAuth(
+          `/api/members/${form.member_id}/accounts?active_only=true`,
+          { signal: controller.signal }
+        );
+        if (!result.success) throw new Error(result.error || 'Could not load member accounts.');
+        setMemberAccounts(result.data || []);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setMemberAccountsError(error.message || 'Could not load member accounts.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setMemberAccountsLoading(false);
+      }
+    };
+    loadAccounts();
+    return () => controller.abort();
   }, [form.member_id]);
+
+  useEffect(() => {
+    if (!form.member_id) {
+      setGuarantorCandidates([]);
+      setGuarantorSearchLoading(false);
+      setGuarantorSearchError('');
+      setRequiredGuarantors(0);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setGuarantorSearchLoading(guarantorSearch.trim().length >= 2);
+      setGuarantorSearchError('');
+      try {
+        const params = new URLSearchParams({ member_id: form.member_id });
+        if (guarantorSearch.trim()) params.set('search', guarantorSearch.trim());
+        const result = await fetchWithAuth(`/api/loans/guarantor-candidates?${params}`, {
+          signal: controller.signal,
+        });
+        if (!result.success) throw new Error(result.error || 'Could not search group members.');
+        setRequiredGuarantors(result.requiredCount || 0);
+        const selectedIds = new Set(selectedGuarantors.map(item => item.id));
+        setGuarantorCandidates((result.data || []).filter(member => !selectedIds.has(member.id)));
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setGuarantorCandidates([]);
+          setGuarantorSearchError(error.message || 'Could not search group members.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setGuarantorSearchLoading(false);
+      }
+    }, guarantorSearch.trim() ? 250 : 0);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [form.member_id, guarantorSearch, selectedGuarantors]);
+
+  const selectMember = (member) => {
+    setForm(current => ({ ...current, member_id: member.id, member_account_id: '' }));
+    setMemberSearch(`${member.full_name} (${member.membership_number || 'No member number'})`);
+    setMemberSuggestions([]);
+    setMemberSearchError('');
+    setActiveSuggestion(-1);
+    setGuarantorSearch('');
+    setSelectedGuarantors([]);
+    setGuarantorCandidates([]);
+    setRequiredGuarantors(0);
+    setGuarantorSearchError('');
+  };
+
+  const addGuarantor = (member) => {
+    const splitAmount = Number(form.principal) > 0
+      ? (Number(form.principal) / Math.max(requiredGuarantors, 1)).toFixed(2)
+      : '';
+    setSelectedGuarantors(current => [...current, {
+      id: member.id,
+      full_name: member.full_name,
+      membership_number: member.membership_number,
+      guaranteed_amount: splitAmount,
+      customAmount: false,
+    }]);
+    setGuarantorCandidates(current => current.filter(candidate => candidate.id !== member.id));
+  };
+
+  const removeGuarantor = (memberId) => {
+    setSelectedGuarantors(current => current.filter(member => member.id !== memberId));
+  };
+
+  const handleMemberSearchKeyDown = (event) => {
+    if (event.key === 'ArrowDown' && memberSuggestions.length) {
+      event.preventDefault();
+      setActiveSuggestion(index => Math.min(index + 1, memberSuggestions.length - 1));
+    } else if (event.key === 'ArrowUp' && memberSuggestions.length) {
+      event.preventDefault();
+      setActiveSuggestion(index => Math.max(index - 1, 0));
+    } else if (event.key === 'Enter' && activeSuggestion >= 0 && memberSuggestions[activeSuggestion]) {
+      event.preventDefault();
+      selectMember(memberSuggestions[activeSuggestion]);
+    } else if (event.key === 'Escape') {
+      setMemberSuggestions([]);
+      setActiveSuggestion(-1);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.member_id || !form.principal) return;
+    if (!form.member_id) {
+      toast.error('Choose a member from the search suggestions.');
+      return;
+    }
+    if (!form.principal) return;
+    if (selectedGuarantors.length < requiredGuarantors) {
+      toast.error(`Select at least ${requiredGuarantors} group member${requiredGuarantors === 1 ? '' : 's'} as guarantor${requiredGuarantors === 1 ? '' : 's'}.`);
+      return;
+    }
+    if (selectedGuarantors.some(guarantor => !Number.isFinite(Number(guarantor.guaranteed_amount)) || Number(guarantor.guaranteed_amount) <= 0)) {
+      toast.error('Enter a positive guaranteed amount for each guarantor.');
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetchWithAuth('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          guarantors: selectedGuarantors.map(guarantor => ({
+            guarantor_member_id: guarantor.id,
+            guaranteed_amount: Number(guarantor.guaranteed_amount),
+          })),
+        }),
       });
       const json = await res.json();
       if (json.success) {
         toast.success('Loan application submitted');
         setShowForm(false);
         setForm({ member_id: '', product_id: '', member_account_id: '', principal: '' });
+        setMemberSearch('');
+        setGuarantorSearch('');
+        setSelectedGuarantors([]);
+        setRequiredGuarantors(0);
         fetchLoans();
       } else {
         toast.error(json.error || 'Failed to create loan');
@@ -169,13 +350,60 @@ export default function LoansPage() {
           <h2 className="text-lg font-semibold text-foreground">New Loan Application</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Member *</label>
-              <select value={form.member_id} onChange={e => setForm(f => ({ ...f, member_id: e.target.value, member_account_id: '' }))} required className={inputClass}>
-                <option value="">Select member...</option>
-                {members.filter(m => m.status === 'active').map(m => (
-                  <option key={m.id} value={m.id}>{m.full_name} ({m.membership_number})</option>
-                ))}
-              </select>
+              <label htmlFor="loan-member-search" className="block text-xs font-medium text-muted-foreground mb-1">Member *</label>
+              <div className="relative">
+                <input
+                  id="loan-member-search"
+                  type="search"
+                  autoComplete="off"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={memberSuggestions.length > 0}
+                  aria-controls="loan-member-suggestions"
+                  aria-activedescendant={activeSuggestion >= 0 ? `loan-member-option-${memberSuggestions[activeSuggestion]?.id}` : undefined}
+                  value={memberSearch}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setMemberSearch(value);
+                    setMemberSearchLoading(value.trim().length >= 2);
+                    setMemberSearchError('');
+                    setMemberSuggestions([]);
+                    setForm(current => ({ ...current, member_id: '', member_account_id: '' }));
+                    setMemberAccounts([]);
+                    setMemberAccountsError('');
+                    setGuarantorSearch('');
+                    setGuarantorCandidates([]);
+                    setSelectedGuarantors([]);
+                    setRequiredGuarantors(0);
+                  }}
+                  onKeyDown={handleMemberSearchKeyDown}
+                  placeholder="Type a member name or number..."
+                  required
+                  className={inputClass}
+                />
+                {memberSuggestions.length > 0 && (
+                  <ul id="loan-member-suggestions" role="listbox" className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
+                    {memberSuggestions.map((member, index) => (
+                      <li key={member.id} id={`loan-member-option-${member.id}`} role="option" aria-selected={index === activeSuggestion}>
+                        <button
+                          type="button"
+                          onMouseDown={event => event.preventDefault()}
+                          onClick={() => selectMember(member)}
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-muted ${index === activeSuggestion ? 'bg-muted' : ''}`}
+                        >
+                          <span className="block font-medium text-foreground">{member.full_name}</span>
+                          <span className="block text-xs text-muted-foreground">{member.membership_number}{member.phone ? ` · ${member.phone}` : ''}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {memberSearchLoading && <p className="mt-1 text-xs text-muted-foreground">Searching members…</p>}
+              {memberSearchError && <p role="alert" className="mt-1 text-xs text-red-600">{memberSearchError}</p>}
+              {!memberSearchLoading && !memberSearchError && memberSearch.trim().length >= 2 && !form.member_id && memberSuggestions.length === 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">No active members found.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">Loan Product</label>
@@ -188,21 +416,114 @@ export default function LoansPage() {
             </div>
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">Disbursement Account</label>
-              <select value={form.member_account_id} onChange={e => setForm(f => ({ ...f, member_account_id: e.target.value }))} className={inputClass}>
+              <select value={form.member_account_id} onChange={e => setForm(f => ({ ...f, member_account_id: e.target.value }))} disabled={!form.member_id || memberAccountsLoading || memberAccounts.length === 0} className={inputClass}>
                 <option value="">Select account...</option>
                 {memberAccounts.map(a => (
                   <option key={a.member_account_id || a.id} value={a.member_account_id || a.id}>
-                    {a.account_type} — {a.account_number} ({fmtCurrency(a.balance, a.currency)})
+                    {a.account_type_name || a.account_type} — {a.account_number} ({fmtCurrency(a.balance, a.currency)})
                   </option>
                 ))}
               </select>
+              {memberAccountsLoading && <p className="mt-1 text-xs text-muted-foreground">Loading active member accounts…</p>}
+              {memberAccountsError && <p role="alert" className="mt-1 text-xs text-red-600">{memberAccountsError}</p>}
+              {!memberAccountsLoading && !memberAccountsError && !form.member_id && (
+                <p className="mt-1 text-xs text-muted-foreground">Select a member to load their active accounts.</p>
+              )}
+              {!memberAccountsLoading && !memberAccountsError && form.member_id && memberAccounts.length === 0 && (
+                <p className="mt-1 text-xs text-amber-700">No active accounts found. The account is optional for application but needed to disburse the loan.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">Principal Amount (UGX) *</label>
-              <input type="number" min="1" step="1" value={form.principal} onChange={e => setForm(f => ({ ...f, principal: e.target.value }))}
+              <input type="number" min="1" step="1" value={form.principal} onChange={e => {
+                const principal = e.target.value;
+                setForm(f => ({ ...f, principal }));
+                const defaultAmount = Number(principal) > 0
+                  ? (Number(principal) / Math.max(requiredGuarantors, 1)).toFixed(2)
+                  : '';
+                setSelectedGuarantors(current => current.map(guarantor =>
+                  guarantor.customAmount ? guarantor : { ...guarantor, guaranteed_amount: defaultAmount }
+                ));
+              }}
                 required placeholder="1000000" className={inputClass} />
             </div>
           </div>
+          <section className="space-y-3 rounded-lg border border-border p-4" aria-labelledby="loan-guarantors-heading">
+            <div>
+              <h3 id="loan-guarantors-heading" className="text-sm font-semibold">Group guarantors</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {requiredGuarantors > 0
+                  ? `Select at least ${requiredGuarantors} active group member${requiredGuarantors === 1 ? '' : 's'} as guarantor${requiredGuarantors === 1 ? '' : 's'}.`
+                  : 'Guarantors are optional. Search for active members of the applicant’s group.'}
+                {requiredGuarantors > 0 && ` ${selectedGuarantors.length} of ${requiredGuarantors} required selected.`}
+              </p>
+            </div>
+            {!form.member_id ? (
+              <p className="text-sm text-muted-foreground">Select the loan applicant first to find their group members.</p>
+            ) : <>
+              <label htmlFor="loan-guarantor-search" className="sr-only">Search group members to add as guarantors</label>
+              <input
+                id="loan-guarantor-search"
+                type="search"
+                autoComplete="off"
+                value={guarantorSearch}
+                onChange={event => {
+                  setGuarantorSearch(event.target.value);
+                  setGuarantorSearchLoading(event.target.value.trim().length >= 2);
+                  setGuarantorSearchError('');
+                  setGuarantorCandidates([]);
+                }}
+                placeholder="Search applicant’s group by name or member number..."
+                className={inputClass}
+              />
+              {guarantorSearchLoading && <p className="text-xs text-muted-foreground">Searching group members…</p>}
+              {guarantorSearchError && <p role="alert" className="text-xs text-red-600">{guarantorSearchError}</p>}
+              {guarantorCandidates.length > 0 && (
+                <ul className="max-h-48 divide-y divide-border overflow-y-auto rounded border border-border">
+                  {guarantorCandidates.map(member => (
+                    <li key={member.id}>
+                      <button type="button" onClick={() => addGuarantor(member)} className="w-full px-3 py-2 text-left text-sm hover:bg-muted">
+                        <span className="block font-medium">{member.full_name}</span>
+                        <span className="text-xs text-muted-foreground">{member.membership_number}{member.phone ? ` · ${member.phone}` : ''}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!guarantorSearchLoading && !guarantorSearchError && guarantorSearch.trim().length >= 2 && guarantorCandidates.length === 0 && (
+                <p className="text-xs text-muted-foreground">No matching active members found in the applicant’s group.</p>
+              )}
+              {selectedGuarantors.length > 0 && (
+                <ul className="space-y-2">
+                  {selectedGuarantors.map(member => (
+                    <li key={member.id} className="grid grid-cols-1 items-end gap-2 rounded border border-border p-3 sm:grid-cols-[1fr_12rem_auto]">
+                      <div>
+                        <p className="text-sm font-medium">{member.full_name}</p>
+                        <p className="text-xs text-muted-foreground">{member.membership_number}</p>
+                      </div>
+                      <label className="text-xs text-muted-foreground">
+                        Guaranteed amount (UGX)
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          required
+                          value={member.guaranteed_amount}
+                          onChange={event => setSelectedGuarantors(current => current.map(item =>
+                            item.id === member.id ? { ...item, guaranteed_amount: event.target.value, customAmount: true } : item
+                          ))}
+                          className={`${inputClass} mt-1`}
+                        />
+                      </label>
+                      <button type="button" onClick={() => removeGuarantor(member.id)} className="rounded border border-border px-3 py-2 text-sm hover:bg-muted">
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>}
+          </section>
           <button type="submit" disabled={saving}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition">
             {saving ? 'Submitting...' : 'Submit Application'}
