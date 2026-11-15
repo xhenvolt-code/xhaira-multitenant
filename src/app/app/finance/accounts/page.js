@@ -16,6 +16,7 @@ export default function AccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' });
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const toast = useToast();
 
   useEffect(() => { fetchAccounts(); }, []);
@@ -24,8 +25,9 @@ export default function AccountsPage() {
     try {
       const res = await fetchWithAuth('/api/accounts');
       const json = await res.json();
-      if (json.success) setAccounts(json.data);
-    } catch (err) { console.error(err); } finally { setLoading(false); }
+      if (json.success) { setAccounts(json.data || []); setLoadError(''); }
+      else setLoadError(json.error || 'Failed to load accounts');
+    } catch (err) { console.error(err); setLoadError(err.message || 'Failed to load accounts'); } finally { setLoading(false); }
   };
 
   const submit = async (e) => {
@@ -35,8 +37,10 @@ export default function AccountsPage() {
       if (body.initial_balance) body.initial_balance = parseFloat(body.initial_balance);
       else delete body.initial_balance;
       const res = await fetchWithAuth('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if ((await res.json()).success) { toast.success('Account created'); setShowForm(false); setForm({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' }); fetchAccounts(); }
-    } catch (err) { console.error(err); } finally { setSaving(false); }
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to create account');
+      toast.success('Account created'); setShowForm(false); setForm({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' }); await fetchAccounts();
+    } catch (err) { console.error(err); toast.error(err.message || 'Failed to create account'); } finally { setSaving(false); }
   };
 
   const totalBalance = accounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
@@ -82,6 +86,8 @@ export default function AccountsPage() {
 
       {loading ? (
         <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>
+      ) : loadError ? (
+        <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800">{loadError}</div>
       ) : accounts.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">No accounts yet. Create your first account to start tracking finances.</div>
       ) : (

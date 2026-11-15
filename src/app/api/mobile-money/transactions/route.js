@@ -30,8 +30,8 @@ export async function GET(request) {
   return NextResponse.json({
     success: true,
     configured: isMarzpayConfigured(),
-    collectionsEnabled: isMarzpayConfigured() && process.env.MARZPAY_COLLECTIONS_ENABLED === 'true',
-    disbursementsEnabled: isMarzpayConfigured() && process.env.MARZPAY_DISBURSEMENTS_ENABLED === 'true',
+    collectionsEnabled: isMarzpayConfigured(),
+    disbursementsEnabled: isMarzpayConfigured(),
     accounts: accounts.rows,
   });
 }

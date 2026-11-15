@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { query } from '@/lib/db.js';
+import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 
 // GET /api/accounts — accounts.view
@@ -23,30 +23,44 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const { name, type, currency, description, institution, account_number, initial_balance } = body;
-    if (!name || !type) return NextResponse.json({ success: false, error: 'name and type are required' }, { status: 400 });
+    if (typeof name !== 'string' || !name.trim() || !type) return NextResponse.json({ success: false, error: 'Account name and type are required' }, { status: 400 });
     const VALID_TYPES = ['bank','cash','mobile_money','credit_card','investment','escrow','savings','internal','salary','other'];
     if (!VALID_TYPES.includes(type)) {
       return NextResponse.json({ success: false, error: `Invalid account type "${type}". Allowed: ${VALID_TYPES.join(', ')}` }, { status: 400 });
     }
-    const result = await query(
-      `INSERT INTO accounts (name, type, currency, description, institution, account_number)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [name, type, currency||'UGX', description||null, institution||null, account_number||null]
-    );
-    // If initial balance provided, create a ledger entry
-    if (initial_balance && parseFloat(initial_balance) !== 0) {
-      await query(
-        `INSERT INTO ledger (account_id, amount, currency, source_type, description, category, entry_date, created_by)
-         VALUES ($1,$2,$3,'initial_balance',$4,'initial_balance',CURRENT_DATE,$5)`,
-        [result.rows[0].id, parseFloat(initial_balance), currency||'UGX',
-         `Initial balance for ${name}`, perm.userId]
+    const openingBalance = initial_balance === undefined || initial_balance === '' ? 0 : Number(initial_balance);
+    if (!Number.isFinite(openingBalance)) return NextResponse.json({ success: false, error: 'Initial balance must be a valid number' }, { status: 400 });
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `INSERT INTO accounts (name, type, currency, description, institution, account_number)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [name.trim(), type, String(currency || 'UGX').trim().toUpperCase(), description?.trim() || null, institution?.trim() || null, account_number?.trim() || null]
       );
+      const account = result.rows[0];
+      if (openingBalance !== 0) {
+        await client.query(
+          `INSERT INTO ledger (account_id, amount, currency, source_type, description, category, entry_date, created_by)
+           VALUES ($1,$2,$3,'initial_balance',$4,'initial_balance',CURRENT_DATE,$5)`,
+          [account.id, openingBalance, account.currency, `Initial balance for ${account.name}`, perm.auth.userId]
+        );
+      }
+      await client.query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)`,
+        [perm.auth.userId, 'CREATE', 'account', account.id, JSON.stringify({ name: account.name, type })]);
+      await client.query('COMMIT');
+      return NextResponse.json({ success: true, data: account }, { status: 201 });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      await client.release();
     }
-    await query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)`,
-      [perm.userId, 'CREATE', 'account', result.rows[0].id, JSON.stringify({ name, type })]);
-    return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
   } catch (error) {
-    console.error('[Accounts] POST error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to create account' }, { status: 500 });
+    console.error('[Accounts] POST error:', error.message);
+    return NextResponse.json({ success: false, error: error.code === '23503'
+      ? 'The selected user or account reference does not belong to your organization.'
+      : error.message || 'Failed to create account' }, { status: 500 });
   }
 }

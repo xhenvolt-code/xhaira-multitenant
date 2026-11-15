@@ -18,7 +18,6 @@ function normalizeUgandaPhone(value) {
 
 export async function createMobileMoneyCollection({ amountUgx, phone, settlementAccountId, memberAccountId, idempotencyKey, userId, callbackUrl }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
-  if (process.env.MARZPAY_COLLECTIONS_ENABLED !== 'true') return { ok: false, status: 503, error: 'Mobile money collections are disabled until explicitly enabled' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };

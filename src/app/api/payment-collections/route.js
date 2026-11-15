@@ -34,7 +34,7 @@ export async function GET(request) {
   return NextResponse.json({
     success: true,
     configured: isMarzpayConfigured(),
-    enabled: isMarzpayConfigured() && process.env.MARZPAY_COLLECTIONS_ENABLED === 'true',
+    enabled: isMarzpayConfigured(),
     data: result.rows,
   });
 }

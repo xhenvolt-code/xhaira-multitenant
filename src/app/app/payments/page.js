@@ -119,7 +119,7 @@ export default function PaymentsPage() {
           <div>
             <h2 className="font-semibold text-foreground">Mobile money collection</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {collectionMeta.enabled ? 'MarzPay collections are enabled.' : collectionMeta.configured ? 'MarzPay is configured, but live collections are disabled.' : 'MarzPay is not configured.'}
+              {collectionMeta.enabled ? 'MarzPay collections are ready.' : 'MarzPay is not configured.'}
             </p>
           </div>
         </div>
