@@ -47,7 +47,7 @@ export async function POST(request, { params }) {
     const { account_type, account_type_id, currency } = body;
 
     // Verify member exists and is active
-    const member = await query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1`, [id]);
+    const member = await query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1 AND organization_id = $2`, [id, perm.auth.organizationId]);
     if (member.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
@@ -65,10 +65,10 @@ export async function POST(request, { params }) {
 
     const legacyTypeCodes = { savings: 'VOL_SAV', fixed_deposit: 'FIXED_SAV', shares: 'SHARES', loan: 'LOAN_ACC', investment: 'INVEST' };
     const selectedType = account_type_id
-      ? await query('SELECT id, code FROM account_types WHERE id = $1', [account_type_id])
-      : await query('SELECT id, code FROM account_types WHERE code = $1', [legacyTypeCodes[account_type] || ''], 0);
+      ? await query('SELECT id, code FROM account_types WHERE id = $1 AND organization_id = $2', [account_type_id, perm.auth.organizationId])
+      : await query('SELECT id, code FROM account_types WHERE code = $1 AND organization_id = $2', [legacyTypeCodes[account_type] || '', perm.auth.organizationId]);
     if (!selectedType.rows[0]) {
-      return NextResponse.json({ success: false, error: 'Select a valid configured account type' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'That account type is not configured for your organization. Refresh the page and select one of your organization’s account types.' }, { status: 400 });
     }
     const resolvedTypeId = selectedType.rows[0].id;
     const typeCode = selectedType.rows[0].code;
@@ -81,16 +81,20 @@ export async function POST(request, { params }) {
     const account_number = `ACC-${typePrefix}-${randomSuffix}`;
 
     const result = await query(
-      `INSERT INTO member_accounts (member_id, account_type, account_number, currency, account_type_id)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO member_accounts (organization_id, member_id, account_type, account_number, currency, account_type_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [id, resolvedAccountType, account_number, currency || 'UGX', resolvedTypeId]
+      [perm.auth.organizationId, id, resolvedAccountType, account_number, currency || 'UGX', resolvedTypeId, perm.auth.userId]
     );
 
     return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
     });
   } catch (error) {
     console.error('[Member Accounts] POST error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    const status = error.code === '23514' ? 409 : 500;
+    const message = error.code === '23514'
+      ? 'The selected member, account type, or user does not belong to your active organization. Refresh and try again.'
+      : error.message;
+    return NextResponse.json({ success: false, error: message }, { status });
   }
 }

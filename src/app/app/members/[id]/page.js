@@ -88,11 +88,14 @@ export default function MemberDetailPage() {
   const fetchData = async () => {
     setLoading(true);
     setMemberLoadError('');
+    setAccountTypes([]);
+    setAccountTypesError('');
+    setNewAccount((current) => ({ ...current, account_type_id: '' }));
     try {
       const [memberRes, accountsRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
         fetchWithAuth(`/api/members/${id}`),
         fetchWithAuth(`/api/members/${id}/accounts`),
-        fetchWithAuth('/api/account-types'),
+        fetchWithAuth('/api/account-types', { cache: 'no-store' }),
         fetchWithAuth('/api/member-field-configs'),
         fetchWithAuth(`/api/member-documents?member_id=${id}`),
         fetchWithAuth('/api/member-document-configs'),
@@ -155,6 +158,7 @@ export default function MemberDetailPage() {
       } else {
         setAccountTypes([]);
         setAccountTypesError(typesJson.error || 'Could not load account types.');
+        setNewAccount((current) => ({ ...current, account_type_id: '' }));
       }
     } catch (err) {
       console.error(err);
