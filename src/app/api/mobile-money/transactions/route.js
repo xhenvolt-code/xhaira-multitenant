@@ -5,6 +5,7 @@ import { isMarzpayConfigured } from '@/lib/payments/marzpay.js';
 import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js';
 import { createMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
 import { isDatabaseConnectionError } from '@/lib/db.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
 
@@ -64,12 +65,15 @@ export async function POST(request) {
     callbackUrl: callbackUrl(),
   };
   try {
-  const result = action === 'deposit'
-    ? await createMobileMoneyCollection(input)
-    : await createMobileMoneyDisbursement(input);
-  const intentDetails = result.id
-    ? (await getPool().query('SELECT status, provider_status, failure_reason FROM payment_intents WHERE id = $1', [result.id])).rows[0]
-    : null;
+  const { result, intentDetails } = await runWithOrganizationContext(permission.auth.organizationId, async () => {
+    const result = action === 'deposit'
+      ? await createMobileMoneyCollection(input)
+      : await createMobileMoneyDisbursement(input);
+    const intentDetails = result.id
+      ? (await getPool().query('SELECT status, provider_status, failure_reason FROM payment_intents WHERE id = $1', [result.id])).rows[0]
+      : null;
+    return { result, intentDetails };
+  });
 
   // A transport timeout can leave the provider outcome unknown. Keep the
   // intent visible so the UI polls and reconciles instead of asking for retry.
