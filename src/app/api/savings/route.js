@@ -9,12 +9,14 @@ import { requirePermission }    from '@/lib/permissions.js';
 import { query }                from '@/lib/db.js';
 import { savingsDeposit, savingsWithdraw } from '@/lib/savings-engine.js';
 import { getAccountBehavior }   from '@/lib/account-rules-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // ── GET — Member accounts summary ────────────────────────────────────────────
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const memberId = searchParams.get('member_id') || '';
@@ -22,7 +24,7 @@ export async function GET(request) {
     const limit    = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset   = (page - 1) * limit;
 
-    let where  = `WHERE vb.status = 'active'`;
+    let where  = `WHERE vb.status = 'active' AND vb.currency = 'UGX'`;
     const args = [];
 
     if (memberId) {
@@ -60,6 +62,7 @@ export async function GET(request) {
       data:    dataResult.rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
+    });
   } catch (error) {
     console.error('[Savings] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -71,6 +74,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
     const { action, member_account_id, amount, description, reference, force } = body;
@@ -98,15 +102,16 @@ export async function POST(request) {
       );
     }
 
+    const amountValue = parseFloat(amount);
     let result;
 
     if (action === 'deposit') {
       result = await savingsDeposit({
         memberAccountId: member_account_id,
-        amount:          parseFloat(amount),
+        amount:          amountValue,
         description,
         reference,
-        userId:          perm.userId,
+        userId:          perm.auth.userId,
         paymentMethod,
       });
     } else {
@@ -114,10 +119,10 @@ export async function POST(request) {
       const isSuperAdmin = ['superadmin', 'admin'].includes(perm.auth?.role);
       result = await savingsWithdraw({
         memberAccountId: member_account_id,
-        amount:          parseFloat(amount),
+        amount:          amountValue,
         description,
         reference,
-        userId:          perm.userId,
+        userId:          perm.auth.userId,
         force:           isSuperAdmin && force === true,
         paymentMethod,
       });
@@ -133,6 +138,7 @@ export async function POST(request) {
       entries:     result.entries,
       balance:     result.balance,
       behavior,
+    });
     });
   } catch (error) {
     if (error.code === 'RULE_VIOLATION') {

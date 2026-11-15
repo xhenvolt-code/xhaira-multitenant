@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/accounts — accounts.view
 export async function GET(request) {
   const perm = await requirePermission(request, 'accounts.view');
   if (perm instanceof NextResponse) return perm;
   try {
-    // Use the view to get balances computed from ledger (alias account_id → id for frontend compat)
-    const result = await query(`SELECT account_id AS id, * FROM v_account_balances ORDER BY balance DESC`);
-    return NextResponse.json({ success: true, data: result.rows });
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
+      // Use the view to get balances computed from ledger (alias account_id → id for frontend compat)
+      const result = await query(`SELECT account_id AS id, * FROM v_account_balances ORDER BY balance DESC`);
+      return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     console.error('[Accounts] GET error:', error);
     return NextResponse.json({ success: false, error: 'Failed to fetch accounts' }, { status: 500 });
@@ -21,6 +24,7 @@ export async function POST(request) {
   const perm = await requirePermission(request, 'accounts.create');
   if (perm instanceof NextResponse) return perm;
   try {
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const body = await request.json();
     const { name, type, currency, description, institution, account_number, initial_balance } = body;
     if (typeof name !== 'string' || !name.trim() || !type) return NextResponse.json({ success: false, error: 'Account name and type are required' }, { status: 400 });
@@ -57,6 +61,7 @@ export async function POST(request) {
     } finally {
       await client.release();
     }
+    });
   } catch (error) {
     console.error('[Accounts] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.code === '23503'

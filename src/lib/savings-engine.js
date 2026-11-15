@@ -89,6 +89,7 @@ export async function savingsWithdraw({ memberAccountId, amount, description, re
     reference,
     userId,
     paymentMethod,
+    force,
   });
 
   const balance = await getMemberAccountBalance(memberAccountId);

@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { createTransaction, deposit, withdraw } from '@/lib/transaction-service.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/transactions — List transactions with pagination
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || '';
@@ -67,6 +69,7 @@ export async function GET(request) {
         totalPages: Math.ceil(parseInt(countResult.rows[0]?.total || 0) / limit),
       },
     });
+    });
   } catch (error) {
     console.error('[Transactions] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -78,6 +81,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
     const { action, member_account_id, account_id, amount, description, reference, entries, transaction_type, metadata } = body;
@@ -98,7 +102,7 @@ export async function POST(request) {
         amount: parseFloat(amount),
         description,
         reference,
-        userId: perm.userId,
+        userId: perm.auth.userId,
       });
     } else if (action === 'withdraw') {
       if (!member_account_id || !amount) {
@@ -109,7 +113,7 @@ export async function POST(request) {
         amount: parseFloat(amount),
         description,
         reference,
-        userId: perm.userId,
+        userId: perm.auth.userId,
       });
     } else if (entries) {
       // Custom double-entry transaction
@@ -118,7 +122,7 @@ export async function POST(request) {
         transaction_type: transaction_type || 'adjustment',
         reference,
         metadata,
-        userId: perm.userId,
+        userId: perm.auth.userId,
         entries: entries.map(e => ({
           ...e,
           amount: parseFloat(e.amount),
@@ -129,9 +133,11 @@ export async function POST(request) {
     }
 
     return NextResponse.json({ success: true, data: result }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Transactions] POST error:', error.message);
-    const status = error.message.includes('Insufficient balance') ? 400
+    const status = error.code === 'RULE_VIOLATION' ? 422
+      : error.message.includes('Insufficient balance') ? 400
       : error.message.includes('not balanced') ? 400
       : error.message.includes('not found') ? 404
       : 500;

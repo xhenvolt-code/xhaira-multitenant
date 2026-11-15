@@ -19,6 +19,10 @@ function normalizeUgandaPhone(value) {
 export async function createMobileMoneyCollection({ amountUgx, phone, settlementAccountId, memberAccountId, idempotencyKey, userId, callbackUrl }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(settlementAccountId || '')) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
+    return { ok: false, status: 400, error: 'Select a valid settlement account and member account' };
+  }
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
   if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
@@ -26,18 +30,19 @@ export async function createMobileMoneyCollection({ amountUgx, phone, settlement
   const accountCheck = await getPool().query(
     `SELECT a.id FROM accounts a
      JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
-     WHERE a.id = $1 AND a.type = 'mobile_money' AND a.is_active = true AND ma.status = 'active'`,
+     WHERE a.id = $1 AND a.currency = 'UGX' AND a.is_active = true
+       AND ma.currency = 'UGX' AND ma.status = 'active'`,
     [settlementAccountId, memberAccountId]
   );
-  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active mobile-money account and active member account' };
+  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX settlement account and active UGX member account' };
 
   const existing = await getPool().query(
-    'SELECT id, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1',
+    "SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1",
     [idempotencyKey]
   );
   if (existing.rows[0]) {
     const intent = existing.rows[0];
-    if (Number(intent.amount_minor) !== amountUgx || intent.settlement_account_id !== settlementAccountId || intent.member_account_id !== memberAccountId) {
+    if (intent.direction !== 'collection' || Number(intent.amount_minor) !== amountUgx || intent.settlement_account_id !== settlementAccountId || intent.member_account_id !== memberAccountId) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx: Number(intent.amount_minor) };
@@ -49,12 +54,12 @@ export async function createMobileMoneyCollection({ amountUgx, phone, settlement
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (organization_id, idempotency_key) DO NOTHING
      RETURNING id, provider_reference, status`,
-    [idempotencyKey, amountUgx, settlementAccountId, memberAccountId, `${phone.slice(0, 6)}***${phone.slice(-3)}`, userId]
+    [idempotencyKey, amountUgx, settlementAccountId, memberAccountId, `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, userId]
   );
   if (!inserted.rows[0]) {
-    const duplicate = await getPool().query('SELECT id, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1', [idempotencyKey]);
+    const duplicate = await getPool().query('SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1', [idempotencyKey]);
     if (!duplicate.rows[0]) return { ok: false, status: 409, error: 'Could not reserve this idempotency key' };
-    if (Number(duplicate.rows[0].amount_minor) !== amountUgx || duplicate.rows[0].settlement_account_id !== settlementAccountId || duplicate.rows[0].member_account_id !== memberAccountId) {
+    if (duplicate.rows[0].direction !== 'collection' || Number(duplicate.rows[0].amount_minor) !== amountUgx || duplicate.rows[0].settlement_account_id !== settlementAccountId || duplicate.rows[0].member_account_id !== memberAccountId) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: duplicate.rows[0].id, status: duplicate.rows[0].status, amountUgx: Number(duplicate.rows[0].amount_minor) };

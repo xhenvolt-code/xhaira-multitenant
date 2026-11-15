@@ -13,6 +13,7 @@
  */
 
 import { getPool } from '@/lib/db.js';
+import { validateWithdrawal } from '@/lib/account-rules-engine.js';
 
 /**
  * Get the system cash account ID (SACCO liquidity pool)
@@ -78,16 +79,22 @@ export async function createTransaction({ description, transaction_type, referen
     for (const entry of entries) {
       if (entry.member_account_id) {
         const acct = await client.query(
-          `SELECT id, status FROM member_accounts WHERE id = $1`, [entry.member_account_id]
+          `SELECT id, status, currency FROM member_accounts WHERE id = $1`, [entry.member_account_id]
         );
         if (acct.rows.length === 0) throw new Error(`Member account ${entry.member_account_id} not found`);
         if (acct.rows[0].status === 'closed') throw new Error(`Member account ${entry.member_account_id} is closed`);
+        if (acct.rows[0].currency !== (entry.currency || 'UGX')) {
+          throw new Error(`Currency mismatch for member account ${entry.member_account_id}`);
+        }
       }
       if (entry.account_id) {
         const acct = await client.query(
-          `SELECT id, is_active FROM accounts WHERE id = $1`, [entry.account_id]
+          `SELECT id, is_active, currency FROM accounts WHERE id = $1`, [entry.account_id]
         );
         if (acct.rows.length === 0) throw new Error(`Account ${entry.account_id} not found`);
+        if (acct.rows[0].currency !== (entry.currency || 'UGX')) {
+          throw new Error(`Currency mismatch for account ${entry.account_id}`);
+        }
       }
     }
 
@@ -196,20 +203,44 @@ export async function deposit({ memberAccountId, amount, description, reference,
 /**
  * Withdraw money from a member account (to SACCO cash)
  */
-export async function withdraw({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash' }) {
-  // Check sufficient balance
-  const balance = await getMemberAccountBalance(memberAccountId);
-  if (balance < amount) {
-    throw new Error(`Insufficient balance. Available: ${balance}, Requested: ${amount}`);
-  }
-
+export async function withdraw({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', force = false }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
-    const systemAccountId = await getSystemAccountId(client);
-    client.release();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [memberAccountId]);
 
-    return await createTransaction({
+    const [balanceResult, reservedResult] = await Promise.all([
+      client.query(
+        `SELECT COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE -amount END), 0) AS balance
+           FROM ledger_entries WHERE member_account_id = $1`,
+        [memberAccountId]
+      ),
+      client.query(
+        `SELECT COALESCE(SUM(amount_minor), 0)::numeric AS amount
+           FROM payment_intents
+          WHERE member_account_id = $1 AND direction = 'disbursement'
+            AND status = ANY($2::text[])`,
+        [memberAccountId, ['created', 'processing', 'review']]
+      ),
+    ]);
+    const balance = Number(balanceResult.rows[0]?.balance || 0);
+    const reserved = Number(reservedResult.rows[0]?.amount || 0);
+    const available = balance - reserved;
+    if (available < amount) {
+      throw new Error(`Insufficient balance after pending withdrawals. Available: ${available}, Requested: ${amount}`);
+    }
+    if (!force) {
+      const validation = await validateWithdrawal(memberAccountId, amount, available);
+      if (!validation.allowed) {
+        const error = new Error(validation.reason);
+        error.code = 'RULE_VIOLATION';
+        throw error;
+      }
+    }
+
+    const systemAccountId = await getSystemAccountId(client);
+    const result = await createTransaction({
       description: description || 'Member withdrawal',
       transaction_type: 'withdrawal',
       reference,
@@ -220,9 +251,13 @@ export async function withdraw({ memberAccountId, amount, description, reference
         { account_id: systemAccountId, type: 'CREDIT', amount },
       ],
     });
+    await client.query('COMMIT');
+    return result;
   } catch (err) {
-    client.release();
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
+  } finally {
+    await client.release();
   }
 }
 

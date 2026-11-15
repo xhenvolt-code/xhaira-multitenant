@@ -1,5 +1,4 @@
 import { getPool } from '@/lib/db.js';
-import { getMemberAccountBalance } from '@/lib/transaction-service.js';
 import { validateWithdrawal } from '@/lib/account-rules-engine.js';
 import { getMarzpayDisbursement, isMarzpayConfigured, judgeMarzpayCollection, sendMarzpayMoney } from '@/lib/payments/marzpay.js';
 
@@ -20,6 +19,10 @@ function normalizeUgandaPhone(value) {
 export async function createMobileMoneyDisbursement({ amountUgx, phone, settlementAccountId, memberAccountId, idempotencyKey, userId, callbackUrl }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(settlementAccountId || '')) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
+    return { ok: false, status: 400, error: 'Select a valid settlement account and member account' };
+  }
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
   if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
@@ -29,11 +32,11 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, settleme
     `SELECT a.id
        FROM accounts a
        JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
-      WHERE a.id = $1 AND a.type = 'mobile_money' AND a.currency = 'UGX'
-        AND a.is_active = true AND ma.status = 'active'`,
+       WHERE a.id = $1 AND a.currency = 'UGX' AND a.is_active = true
+         AND ma.currency = 'UGX' AND ma.status = 'active'`,
     [settlementAccountId, memberAccountId]
   );
-  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX mobile-money account and active member account' };
+  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX settlement account and active UGX member account' };
 
   const existing = await pool.query(
     `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id
@@ -48,40 +51,76 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, settleme
     return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx };
   }
 
-  const balance = await getMemberAccountBalance(memberAccountId);
-  const reserved = await pool.query(
-    `SELECT COALESCE(SUM(amount_minor), 0)::numeric AS amount
-       FROM payment_intents
-      WHERE member_account_id = $1 AND direction = 'disbursement'
-        AND status = ANY($2::text[])`,
-    [memberAccountId, OPEN_STATUSES]
-  );
-  const available = balance - Number(reserved.rows[0]?.amount || 0);
-  const ruleCheck = await validateWithdrawal(memberAccountId, amountUgx, available);
-  if (!ruleCheck.allowed) return { ok: false, status: 422, error: ruleCheck.reason };
+  const client = await pool.connect();
+  let intent;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [memberAccountId]);
 
-  const inserted = await pool.query(
-    `INSERT INTO payment_intents
-       (idempotency_key, direction, amount_minor, settlement_account_id, member_account_id, phone_masked, created_by)
-     VALUES ($1, 'disbursement', $2, $3, $4, $5, $6)
-     ON CONFLICT (organization_id, idempotency_key) DO NOTHING
-     RETURNING id, provider_reference, status`,
-    [idempotencyKey, amountUgx, settlementAccountId, memberAccountId, `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, userId]
-  );
-  if (!inserted.rows[0]) {
-    const duplicate = await pool.query(
+    const duplicate = await client.query(
       `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id
          FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
       [idempotencyKey]
     );
-    const intent = duplicate.rows[0];
-    if (!intent || intent.direction !== 'disbursement' || Number(intent.amount_minor) !== amountUgx || intent.settlement_account_id !== settlementAccountId || intent.member_account_id !== memberAccountId) {
-      return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
+    if (duplicate.rows[0]) {
+      const existingIntent = duplicate.rows[0];
+      await client.query('COMMIT');
+      if (existingIntent.direction !== 'disbursement' || Number(existingIntent.amount_minor) !== amountUgx ||
+          existingIntent.settlement_account_id !== settlementAccountId || existingIntent.member_account_id !== memberAccountId) {
+        return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
+      }
+      return { ok: true, duplicate: true, id: existingIntent.id, status: existingIntent.status, amountUgx };
     }
-    return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx };
-  }
 
-  const intent = inserted.rows[0];
+    const balanceResult = await client.query(
+      `SELECT COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE -amount END), 0) AS balance
+         FROM ledger_entries WHERE member_account_id = $1`,
+      [memberAccountId]
+    );
+    const reservedResult = await client.query(
+      `SELECT COALESCE(SUM(amount_minor), 0)::numeric AS amount
+         FROM payment_intents
+        WHERE member_account_id = $1 AND direction = 'disbursement'
+          AND status = ANY($2::text[])`,
+      [memberAccountId, OPEN_STATUSES]
+    );
+    const available = Number(balanceResult.rows[0]?.balance || 0) - Number(reservedResult.rows[0]?.amount || 0);
+    const ruleCheck = await validateWithdrawal(memberAccountId, amountUgx, available);
+    if (!ruleCheck.allowed) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 422, error: ruleCheck.reason };
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO payment_intents
+         (idempotency_key, direction, amount_minor, settlement_account_id, member_account_id, phone_masked, created_by)
+       VALUES ($1, 'disbursement', $2, $3, $4, $5, $6)
+       ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+       RETURNING id, provider_reference, status`,
+      [idempotencyKey, amountUgx, settlementAccountId, memberAccountId, `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, userId]
+    );
+    if (!inserted.rows[0]) {
+      const conflictingIntent = await client.query(
+        `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id
+           FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
+        [idempotencyKey]
+      );
+      await client.query('COMMIT');
+      const existingIntent = conflictingIntent.rows[0];
+      if (!existingIntent || existingIntent.direction !== 'disbursement' || Number(existingIntent.amount_minor) !== amountUgx ||
+          existingIntent.settlement_account_id !== settlementAccountId || existingIntent.member_account_id !== memberAccountId) {
+        return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
+      }
+      return { ok: true, duplicate: true, id: existingIntent.id, status: existingIntent.status, amountUgx };
+    }
+    intent = inserted.rows[0];
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    await client.release();
+  }
   const started = await sendMarzpayMoney({
     amountUgx,
     phone: normalizedPhone,

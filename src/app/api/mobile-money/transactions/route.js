@@ -23,18 +23,20 @@ function callbackUrl() {
 export async function GET(request) {
   const permission = await requirePermission(request, 'finance.view');
   if (permission instanceof NextResponse) return permission;
-  const accounts = await getPool().query(
-    `SELECT id, name, type, currency, is_active
-       FROM accounts
-      WHERE type = 'mobile_money' AND currency = 'UGX' AND is_active = true
-      ORDER BY name`
-  );
-  return NextResponse.json({
-    success: true,
-    configured: isMarzpayConfigured(),
-    collectionsEnabled: isMarzpayConfigured(),
-    disbursementsEnabled: isMarzpayConfigured(),
-    accounts: accounts.rows,
+  return runWithOrganizationContext(permission.auth.organizationId, async () => {
+    const accounts = await getPool().query(
+      `SELECT id, name, type, currency, is_active
+         FROM accounts
+        WHERE currency = 'UGX' AND is_active = true
+        ORDER BY name`
+    );
+    return NextResponse.json({
+      success: true,
+      configured: isMarzpayConfigured(),
+      collectionsEnabled: isMarzpayConfigured(),
+      disbursementsEnabled: isMarzpayConfigured(),
+      accounts: accounts.rows,
+    });
   });
 }
 

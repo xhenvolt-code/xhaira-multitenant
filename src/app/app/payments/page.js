@@ -34,7 +34,9 @@ export default function PaymentsPage() {
       if (!active) return;
       setCollectionMeta({ configured: collection.configured === true, enabled: collection.enabled === true });
       setMembers(memberList.success ? memberList.data || [] : []);
-      setMobileAccounts(accountList.success ? (accountList.data || []).filter(account => account.type === 'mobile_money' && account.is_active) : []);
+      setMobileAccounts(accountList.success
+        ? (accountList.data || []).filter(account => account.currency === 'UGX' && account.is_active)
+        : []);
     }).catch(() => {
       if (active) setCollectionError('Unable to load payment account options.');
     });
@@ -56,7 +58,7 @@ export default function PaymentsPage() {
     setMemberAccounts([]);
     if (!memberId) return;
     const result = await fetchWithAuth(`/api/members/${memberId}/accounts`);
-    if (result.success) setMemberAccounts((result.data || []).filter(account => account.status === 'active'));
+    if (result.success) setMemberAccounts((result.data || []).filter(account => account.status === 'active' && account.currency === 'UGX'));
   };
 
   const startCollection = async (event) => {
@@ -150,8 +152,8 @@ export default function PaymentsPage() {
           <label className="text-sm text-muted-foreground">
             Settlement account
             <select required value={collectionForm.settlementAccountId} onChange={event => setCollectionForm(form => ({ ...form, settlementAccountId: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground">
-              <option value="">Select mobile-money account</option>
-              {mobileAccounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+              <option value="">Select active UGX settlement account</option>
+              {mobileAccounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.type}</option>)}
             </select>
           </label>
           <label className="text-sm text-muted-foreground">
