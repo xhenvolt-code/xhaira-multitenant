@@ -4,6 +4,7 @@ import { getPool } from '@/lib/db.js';
 import { isMarzpayConfigured } from '@/lib/payments/marzpay.js';
 import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js';
 import { createMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
+import { isDatabaseConnectionError } from '@/lib/db.js';
 
 export const runtime = 'nodejs';
 
@@ -37,7 +38,15 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const permission = await requirePermission(request, 'finance.manage');
+  let permission;
+  try {
+    permission = await requirePermission(request, 'finance.manage');
+  } catch (error) {
+    console.error('[MarzPay] Authentication/database error:', error.message);
+    return NextResponse.json({ success: false, error: isDatabaseConnectionError(error)
+      ? 'Database temporarily unavailable. No payment was started; please retry shortly.'
+      : 'Could not authorize this payment request.' }, { status: isDatabaseConnectionError(error) ? 503 : 500 });
+  }
   if (permission instanceof NextResponse) return permission;
   const body = await request.json().catch(() => null);
   const action = body?.action;
@@ -54,6 +63,7 @@ export async function POST(request) {
     userId: permission.auth.userId,
     callbackUrl: callbackUrl(),
   };
+  try {
   const result = action === 'deposit'
     ? await createMobileMoneyCollection(input)
     : await createMobileMoneyDisbursement(input);
@@ -76,4 +86,13 @@ export async function POST(request) {
     { success: true, id: result.id, status: intentDetails?.status || result.status, provider_status: intentDetails?.provider_status, failure_reason: result.failureReason || intentDetails?.failure_reason, amountUgx: result.amountUgx, duplicate: result.duplicate || false },
     { status: result.duplicate ? 200 : 202 }
   );
+  } catch (error) {
+    console.error(`[MarzPay] ${action} request failed:`, error.message);
+    const status = isDatabaseConnectionError(error) ? 503 : 502;
+    return NextResponse.json({ success: false,
+      error: isDatabaseConnectionError(error)
+        ? 'Database connection failed while preparing this payment. Check transaction status before retrying.'
+        : `MarzPay ${action} failed: ${error.message || 'Unexpected provider or reconciliation error'}`,
+      outcome: 'unknown' }, { status });
+  }
 }

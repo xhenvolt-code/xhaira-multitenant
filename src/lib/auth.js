@@ -56,6 +56,7 @@ export async function findUserById(userId) {
     return result.rows[0] || null;
   } catch (error) {
     console.error('Error finding user by ID:', error.message);
+    if (isDatabaseConnectionError(error)) throw error;
     return null;
   }
 }

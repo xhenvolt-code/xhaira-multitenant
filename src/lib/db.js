@@ -13,7 +13,7 @@ const DATABASE_CONNECTION_ERROR_CODES = new Set([
 
 export function isDatabaseConnectionError(error) {
   return DATABASE_CONNECTION_ERROR_CODES.has(error?.code) ||
-    /DATABASE_URL/.test(error?.message || '');
+    /DATABASE_URL|timeout exceeded when trying to connect|connection terminated due to connection timeout|connection timeout|connection terminated unexpectedly|the database system is starting up/i.test(error?.message || '');
 }
 
 /**
