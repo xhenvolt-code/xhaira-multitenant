@@ -1,6 +1,6 @@
 import { getPool } from '@/lib/db.js';
 import { collectMarzpayMoney, getMarzpayCollection, isMarzpayConfigured, judgeMarzpayCollection } from '@/lib/payments/marzpay.js';
-import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
+import { getMarzpayCollectionFeeBasisPoints, getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
 import { syncMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
 
 const OPEN_STATUSES = ['created', 'processing', 'review'];
