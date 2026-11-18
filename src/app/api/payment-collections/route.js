@@ -26,7 +26,8 @@ export async function GET(request) {
   const limit = Math.min(Math.max(Number.isInteger(requestedLimit) ? requestedLimit : 50, 1), 100);
   return runWithOrganizationContext(permission.auth.organizationId, async () => {
     const result = await getPool().query(
-        `SELECT id, direction, amount_minor, currency, payment_method, status, provider_status,
+        `SELECT id, direction, amount_minor, provider_amount_minor, ledger_amount_minor,
+              provider_currency, provider_mode, currency, payment_method, status, provider_status,
               failure_reason, phone_masked, transaction_id, created_at, settled_at
          FROM payment_intents
         WHERE direction = 'collection'
@@ -58,6 +59,25 @@ export async function POST(request) {
       callbackUrl: callbackUrl(),
     });
     if (!result.ok) return NextResponse.json({ success: false, error: result.error, id: result.id, status: result.state }, { status: result.status });
-    return NextResponse.json({ success: true, id: result.id, status: result.status, amountUgx: result.amountUgx, duplicate: result.duplicate || false }, { status: result.duplicate ? 200 : 202 });
+    const intent = result.id
+      ? (await getPool().query(
+        `SELECT status, provider_status, provider_amount_minor, ledger_amount_minor,
+                provider_currency, failure_reason
+           FROM payment_intents WHERE id = $1`,
+        [result.id]
+      )).rows[0]
+      : null;
+    return NextResponse.json({
+      success: true,
+      id: result.id,
+      status: intent?.status || result.status,
+      provider_status: intent?.provider_status,
+      provider_amount_minor: intent?.provider_amount_minor,
+      ledger_amount_minor: intent?.ledger_amount_minor,
+      provider_currency: intent?.provider_currency,
+      failure_reason: intent?.failure_reason || result.error,
+      amountUgx: result.amountUgx,
+      duplicate: result.duplicate || false,
+    }, { status: result.duplicate ? 200 : 202 });
   });
 }

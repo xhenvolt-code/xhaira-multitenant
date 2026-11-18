@@ -111,6 +111,7 @@ Your system is ready to deploy! Choose your preferred platform below:
 ### Database Setup:
 - [ ] PostgreSQL database created
 - [ ] Apply each database migration before deploying application code that depends on it. For tenant member, group, and private document configuration, run `npm run migrate:member-config` and then `npm run migrate:member-defaults` with `DATABASE_URL` pointing to the target database. Run `npm run migrate:account-type-compat` to support configured account types beyond the original five. Migration 958 backfills missing defaults once; application requests only load configuration rows.
+- [ ] Before deploying provider-confirmed collection amount posting, apply `migrations/961_payment_actual_collection_amounts.sql`. Roll back with `migrations/961_payment_actual_collection_amounts.down.sql` only if no payment has been settled using the new amount fields.
 - [ ] Verify the database seeder is installed: `SELECT to_regprocedure('public.seed_member_configuration_defaults(uuid)') IS NOT NULL;` should return `true`. Runtime access to the seeder is revoked; organization provisioning calls it from the database.
 - [ ] Initial user account created (optional)
 

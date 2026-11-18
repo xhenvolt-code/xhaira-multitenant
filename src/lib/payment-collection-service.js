@@ -122,22 +122,40 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
 
   const lookup = await getMarzpayCollection(row.provider_uuid);
   if (!lookup.ok || !lookup.transaction) return { status: row.status, settled: false, error: safeError(lookup.error) };
-  const verdict = judgeMarzpayCollection(lookup.transaction, Number(row.amount_minor));
+  const verdict = judgeMarzpayCollection(lookup.transaction, Number(row.amount_minor), { allowLowerAmount: true });
 
   if (verdict.state === 'processing') {
     if (Date.now() - new Date(row.created_at).getTime() > 30 * 60 * 1000) {
       await pool.query("UPDATE payment_intents SET status = 'expired', provider_status = $1, failure_reason = 'Collection was not approved before timeout', updated_at = NOW() WHERE id = $2 AND status IN ('created','processing')", [safeError(lookup.transaction.status), intentId]);
       return { status: 'expired', settled: false, error: 'Collection was not approved before timeout' };
     }
-    await pool.query('UPDATE payment_intents SET provider_status = $1, updated_at = NOW() WHERE id = $2 AND status = ANY($3::text[])', [safeError(lookup.transaction.status), intentId, OPEN_STATUSES]);
+    await pool.query(
+      `UPDATE payment_intents
+          SET provider_status = $1, provider_amount_minor = $2, provider_currency = $3,
+              provider_mode = $4, updated_at = NOW()
+        WHERE id = $5 AND status = ANY($6::text[])`,
+      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, intentId, OPEN_STATUSES]
+    );
     return { status: 'processing', settled: false, error: null };
   }
   if (verdict.state === 'failed') {
-    await pool.query("UPDATE payment_intents SET status = 'failed', provider_status = $1, failure_reason = $2, updated_at = NOW() WHERE id = $3 AND status = ANY($4::text[])", [safeError(lookup.transaction.status), verdict.reason, intentId, OPEN_STATUSES]);
+    await pool.query(
+      `UPDATE payment_intents
+          SET status = 'failed', provider_status = $1, provider_amount_minor = $2,
+              provider_currency = $3, provider_mode = $4, failure_reason = $5, updated_at = NOW()
+        WHERE id = $6 AND status = ANY($7::text[])`,
+      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
+    );
     return { status: 'failed', settled: false, error: verdict.reason };
   }
   if (verdict.state === 'review') {
-    await pool.query("UPDATE payment_intents SET status = 'review', provider_status = $1, failure_reason = $2, updated_at = NOW() WHERE id = $3 AND status = ANY($4::text[])", [safeError(lookup.transaction.status), verdict.reason, intentId, OPEN_STATUSES]);
+    await pool.query(
+      `UPDATE payment_intents
+          SET status = 'review', provider_status = $1, provider_amount_minor = $2,
+              provider_currency = $3, provider_mode = $4, failure_reason = $5, updated_at = NOW()
+        WHERE id = $6 AND status = ANY($7::text[])`,
+      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
+    );
     return { status: 'review', settled: false, error: verdict.reason };
   }
 
@@ -161,7 +179,7 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
       ['MarzPay mobile money collection', current.provider_reference, JSON.stringify({ provider: 'marzpay', provider_uuid: current.provider_uuid, payment_intent_id: current.id }), current.created_by]
     );
     const transactionId = transaction.rows[0].id;
-    const amount = Number(current.amount_minor);
+    const amount = verdict.ledgerAmountMinor;
 
     await client.query(
       `INSERT INTO ledger_entries (transaction_id, account_id, entry_type, amount, currency, description)
@@ -179,8 +197,13 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
       [current.settlement_account_id, amount, transactionId, 'MarzPay collection settlement', current.created_by]
     );
     await client.query(
-      "UPDATE payment_intents SET status = 'settled', provider_status = $1, transaction_id = $2, settled_at = NOW(), failure_reason = NULL, updated_at = NOW() WHERE id = $3",
-      [safeError(lookup.transaction.status), transactionId, intentId]
+      `UPDATE payment_intents
+          SET status = 'settled', provider_status = $1, provider_amount_minor = $2,
+              provider_currency = $3, provider_mode = $4, ledger_amount_minor = $5,
+              transaction_id = $6, settled_at = NOW(), failure_reason = NULL, updated_at = NOW()
+        WHERE id = $7`,
+      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
+        verdict.providerMode, amount, transactionId, intentId]
     );
     await client.query('COMMIT');
     return { status: 'settled', settled: true, error: null };

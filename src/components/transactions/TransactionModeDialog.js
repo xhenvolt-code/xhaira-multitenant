@@ -7,6 +7,13 @@ import { formatCurrency } from '@/lib/format-currency';
 
 const FINAL_STATES = new Set(['settled', 'failed', 'expired', 'review']);
 
+function formatProviderAmount(amount, currency) {
+  const code = typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : null;
+  return code
+    ? formatCurrency(amount, code)
+    : `${Number(amount).toLocaleString()} ${currency || 'currency unavailable'}`;
+}
+
 export default function TransactionModeDialog({ action, account, onClose, onManual, onSuccess }) {
   const [step, setStep] = useState('choose');
   const [settings, setSettings] = useState({ configured: false, collectionsEnabled: false, disbursementsEnabled: false, accounts: [] });
@@ -15,6 +22,7 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
   const [settlementAccountId, setSettlementAccountId] = useState('');
   const [intent, setIntent] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState('');
 
   const isDeposit = action === 'deposit';
@@ -62,13 +70,37 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
         }),
       });
       if (!result.success) throw new Error(result.error || 'Could not start the mobile-money transaction.');
-      setIntent({ id: result.id, status: result.status, provider_status: result.provider_status, failure_reason: result.failure_reason, amount_minor: result.amountUgx });
+      setIntent({
+        id: result.id,
+        status: result.status,
+        provider_status: result.provider_status,
+        failure_reason: result.failure_reason,
+        amount_minor: result.amountUgx,
+        provider_amount_minor: result.provider_amount_minor,
+        ledger_amount_minor: result.ledger_amount_minor,
+        provider_currency: result.provider_currency,
+      });
       setStep('status');
       if (result.status === 'settled') onSuccess?.(result);
     } catch (err) {
       setError(err.message || 'Could not start the mobile-money transaction.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const recheckIntent = async () => {
+    if (!intent?.id) return;
+    setRechecking(true);
+    try {
+      const result = await fetchWithAuth(`/api/mobile-money/transactions/${intent.id}`);
+      if (!result.success) throw new Error(result.error || 'Could not recheck payment status.');
+      setIntent({ ...result.data, reconciliationError: result.reconciliationError });
+      if (result.data.status === 'settled') onSuccess?.(result.data);
+    } catch (recheckError) {
+      setIntent(current => ({ ...current, reconciliationError: recheckError.message || 'Could not recheck payment status.' }));
+    } finally {
+      setRechecking(false);
     }
   };
 
@@ -146,13 +178,28 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
         {step === 'status' && <>
           <h2 className="text-lg font-semibold">Mobile-money {isDeposit ? 'deposit' : 'withdrawal'}</h2>
           <div className="rounded-lg border border-border bg-muted/30 p-4">
-            <p className="font-medium">Status: {intent?.provider_status || intent?.status || 'processing'}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{formatCurrency(intent?.amount_minor || amount, 'UGX')} · {account.label}</p>
+            <p className="font-medium">Provider: {intent?.provider_status || 'pending'}</p>
+            <p className="text-sm">Ledger: {intent?.status === 'settled' ? 'posted' : 'not posted'}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{account.label}</p>
+            <p className="mt-2 text-sm text-muted-foreground">Requested: {formatCurrency(intent?.amount_minor ?? amount, 'UGX')}</p>
+            <p className="text-sm text-muted-foreground">Provider confirmed: {intent?.provider_amount_minor == null
+              ? 'Not available'
+              : formatProviderAmount(intent.provider_amount_minor, intent.provider_currency)}</p>
+            <p className="text-sm text-muted-foreground">Credited to member ledger: {intent?.ledger_amount_minor == null
+              ? 'Not posted'
+              : formatCurrency(intent.ledger_amount_minor, 'UGX')}</p>
+            {intent?.provider_amount_minor != null && Number(intent.provider_amount_minor) !== Number(intent.amount_minor) && (
+              <p className="mt-1 text-xs text-amber-800">
+                Provider-reported difference from requested: {formatCurrency(Math.abs(Number(intent.amount_minor) - Number(intent.provider_amount_minor)), 'UGX')}.
+                {Number(intent.provider_amount_minor) < Number(intent.amount_minor) ? ' Less was confirmed.' : ' More was confirmed; it was not posted.'}
+              </p>
+            )}
             {intent?.failure_reason && <p className="mt-2 text-sm text-red-700">{intent.failure_reason}</p>}
             {intent?.provider_message && <p className="mt-2 text-sm text-red-700">{intent.provider_message}</p>}
             {intent?.reconciliationError && <p className="mt-2 text-sm text-amber-800">MarzPay status check: {intent.reconciliationError}</p>}
             {intent?.status === 'processing' && <p className="mt-2 text-xs text-muted-foreground">Waiting for MarzPay confirmation. You can close this window; the transaction remains pending.</p>}
             {intent?.status === 'review' && <p className="mt-2 text-xs text-amber-800">This transaction needs reconciliation before the ledger is updated.</p>}
+            {intent?.status === 'review' && <button type="button" onClick={recheckIntent} disabled={rechecking} className="mt-3 w-full rounded-lg border border-border py-2 text-sm hover:bg-muted disabled:opacity-50">{rechecking ? 'Checking MarzPay…' : 'Recheck payment and ledger'}</button>}
           </div>
           <button type="button" onClick={onClose} className="w-full rounded-lg border border-border py-2 text-sm hover:bg-muted">Close</button>
         </>}

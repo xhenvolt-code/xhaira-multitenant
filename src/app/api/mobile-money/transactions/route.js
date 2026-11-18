@@ -72,7 +72,12 @@ export async function POST(request) {
       ? await createMobileMoneyCollection(input)
       : await createMobileMoneyDisbursement(input);
     const intentDetails = result.id
-      ? (await getPool().query('SELECT status, provider_status, failure_reason FROM payment_intents WHERE id = $1', [result.id])).rows[0]
+      ? (await getPool().query(
+        `SELECT status, provider_status, provider_amount_minor, ledger_amount_minor,
+                provider_currency, failure_reason
+           FROM payment_intents WHERE id = $1`,
+        [result.id]
+      )).rows[0]
       : null;
     return { result, intentDetails };
   });
@@ -80,7 +85,15 @@ export async function POST(request) {
   // A transport timeout can leave the provider outcome unknown. Keep the
   // intent visible so the UI polls and reconciles instead of asking for retry.
   if (!result.ok && result.status === 202 && result.id) {
-    return NextResponse.json({ success: true, id: result.id, status: intentDetails?.status || result.state, provider_status: intentDetails?.provider_status, failure_reason: result.error || intentDetails?.failure_reason, amountUgx: input.amountUgx, pendingReview: true }, { status: 202 });
+    return NextResponse.json({
+      success: true, id: result.id, status: intentDetails?.status || result.state,
+      provider_status: intentDetails?.provider_status,
+      provider_amount_minor: intentDetails?.provider_amount_minor,
+      ledger_amount_minor: intentDetails?.ledger_amount_minor,
+      provider_currency: intentDetails?.provider_currency,
+      failure_reason: result.error || intentDetails?.failure_reason,
+      amountUgx: input.amountUgx, pendingReview: true,
+    }, { status: 202 });
   }
   if (!result.ok) {
     return NextResponse.json(
@@ -89,7 +102,15 @@ export async function POST(request) {
     );
   }
   return NextResponse.json(
-    { success: true, id: result.id, status: intentDetails?.status || result.status, provider_status: intentDetails?.provider_status, failure_reason: result.failureReason || intentDetails?.failure_reason, amountUgx: result.amountUgx, duplicate: result.duplicate || false },
+    {
+      success: true, id: result.id, status: intentDetails?.status || result.status,
+      provider_status: intentDetails?.provider_status,
+      provider_amount_minor: intentDetails?.provider_amount_minor,
+      ledger_amount_minor: intentDetails?.ledger_amount_minor,
+      provider_currency: intentDetails?.provider_currency,
+      failure_reason: result.failureReason || intentDetails?.failure_reason,
+      amountUgx: result.amountUgx, duplicate: result.duplicate || false,
+    },
     { status: result.duplicate ? 200 : 202 }
   );
   } catch (error) {

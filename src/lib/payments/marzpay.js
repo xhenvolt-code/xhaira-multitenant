@@ -2,6 +2,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const DEFAULT_BASE = 'https://wallet.wearemarz.com/api/v1';
 
+function normalizeAmountMinor(raw) {
+  if (typeof raw === 'number') return Number.isSafeInteger(raw) ? raw : null;
+  if (typeof raw !== 'string' || !/^\d+(?:\.0+)?$/.test(raw.trim())) return null;
+  const amount = Number(raw);
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+
 export function getMarzpayConfig() {
   const apiKey = process.env.MARZPAY_API_KEY?.trim();
   const apiSecret = process.env.MARZPAY_API_SECRET?.trim();
@@ -29,7 +36,7 @@ export function normalizeMarzpayTransaction(body) {
     status: transaction.status ?? collection.status ?? disbursement.status ?? null,
     mode: collection.mode ?? disbursement.mode ?? transaction.mode ?? null,
     currency: amount.currency ?? null,
-    amountMinor: raw == null ? null : Number(raw),
+    amountMinor: normalizeAmountMinor(raw),
     provider: collection.provider ?? disbursement.provider ?? transaction.provider ?? null,
     message: transaction.message ?? collection.message ?? disbursement.message ?? root.message ?? null,
   };
@@ -122,14 +129,27 @@ export function verifyMarzpayWebhook(rawBody, signatureHeader, secret, nowMs = D
   return expected.length === received.length && timingSafeEqual(expected, received) ? 'valid' : 'invalid';
 }
 
-export function judgeMarzpayCollection(transaction, expectedAmount) {
+export function judgeMarzpayCollection(transaction, expectedAmount, { allowLowerAmount = false } = {}) {
   const status = String(transaction?.status || '').trim().toLowerCase();
   const mode = String(transaction?.mode || '').trim().toLowerCase();
+  const providerAmountMinor = Number.isSafeInteger(transaction?.amountMinor) ? transaction.amountMinor : null;
+  const providerCurrency = typeof transaction?.currency === 'string' ? transaction.currency.trim().toUpperCase().slice(0, 16) : null;
+  const evidence = { providerAmountMinor, providerCurrency, providerMode: mode.slice(0, 32) || null };
   const allowSandbox = process.env.NODE_ENV !== 'production' && process.env.MARZPAY_ALLOW_SANDBOX === '1';
-  if (['failed', 'cancelled', 'canceled', 'rejected', 'expired'].includes(status)) return { state: 'failed', reason: transaction?.message || `MarzPay reports ${status}` };
-  if (!['completed', 'successful', 'success', 'sandbox'].includes(status)) return { state: 'processing', reason: null };
-  if ((mode === 'sandbox' || status === 'sandbox') && !allowSandbox) return { state: 'failed', reason: 'Sandbox transactions cannot settle real payments' };
-  if (String(transaction?.currency || '').toUpperCase() !== 'UGX') return { state: 'review', reason: 'Provider currency is not UGX' };
-  if (!Number.isSafeInteger(transaction?.amountMinor) || transaction.amountMinor !== expectedAmount) return { state: 'review', reason: 'Provider amount does not match the requested amount' };
-  return { state: 'settled', reason: null };
+  if (['failed', 'cancelled', 'canceled', 'rejected', 'expired'].includes(status)) return { state: 'failed', reason: transaction?.message || `MarzPay reports ${status}`, ...evidence };
+  if (!['completed', 'successful', 'success', 'sandbox'].includes(status)) return { state: 'processing', reason: null, ...evidence };
+  if ((mode === 'sandbox' || status === 'sandbox') && !allowSandbox) return { state: 'failed', reason: 'Sandbox transactions cannot settle real payments', ...evidence };
+  if (providerCurrency !== 'UGX') return { state: 'review', reason: 'Provider currency is not UGX', ...evidence };
+  if (providerAmountMinor === null || providerAmountMinor <= 0 ||
+      providerAmountMinor > expectedAmount ||
+      (providerAmountMinor !== expectedAmount && !allowLowerAmount)) {
+    return { state: 'review', reason: 'Provider amount does not match the requested amount', ...evidence };
+  }
+  return {
+    state: 'settled',
+    reason: null,
+    ...evidence,
+    ledgerAmountMinor: providerAmountMinor,
+    amountDifferenceMinor: expectedAmount - providerAmountMinor,
+  };
 }

@@ -3,10 +3,18 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, Search, Filter, DollarSign, CheckCircle, Clock, Plus, Smartphone } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { formatCurrency } from '@/lib/format-currency';
 import Link from 'next/link';
 import NewPaymentModal from '@/components/modals/NewPaymentModal';
 
 const PAY_STATUS = { pending: 'bg-yellow-100 text-yellow-700', completed: 'bg-emerald-100 text-emerald-700', failed: 'bg-red-100 text-red-700', refunded: 'bg-muted text-foreground' };
+
+function formatProviderAmount(amount, currency) {
+  const code = typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : null;
+  return code
+    ? formatCurrency(amount, code)
+    : `${Number(amount).toLocaleString()} ${currency || 'currency unavailable'}`;
+}
 
 export default function PaymentsPage() {
   const [payments, setPayments] = useState([]);
@@ -20,6 +28,7 @@ export default function PaymentsPage() {
   const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', settlementAccountId: '', phone: '', amountUgx: '' });
   const [collectionIntent, setCollectionIntent] = useState(null);
   const [collectionBusy, setCollectionBusy] = useState(false);
+  const [collectionRechecking, setCollectionRechecking] = useState(false);
   const [collectionError, setCollectionError] = useState('');
 
   useEffect(() => { fetchPayments(); }, [statusFilter]);
@@ -81,11 +90,34 @@ export default function PaymentsPage() {
         setCollectionError(result.error || 'Could not start mobile-money collection.');
         return;
       }
-      setCollectionIntent({ id: result.id, status: result.status, amount_minor: result.amountUgx });
+      setCollectionIntent({
+        id: result.id,
+        status: result.status,
+        provider_status: result.provider_status,
+        amount_minor: result.amountUgx,
+        provider_amount_minor: result.provider_amount_minor,
+        ledger_amount_minor: result.ledger_amount_minor,
+        provider_currency: result.provider_currency,
+        failure_reason: result.failure_reason,
+      });
     } catch (error) {
       setCollectionError(error.message || 'Could not start mobile-money collection.');
     } finally {
       setCollectionBusy(false);
+    }
+  };
+
+  const recheckCollection = async () => {
+    if (!collectionIntent?.id) return;
+    setCollectionRechecking(true);
+    try {
+      const result = await fetchWithAuth(`/api/payment-collections/${collectionIntent.id}`);
+      if (!result.success) throw new Error(result.error || 'Could not recheck payment status.');
+      setCollectionIntent(result.data);
+    } catch (error) {
+      setCollectionError(error.message || 'Could not recheck payment status.');
+    } finally {
+      setCollectionRechecking(false);
     }
   };
 
@@ -173,9 +205,22 @@ export default function PaymentsPage() {
 
         {collectionIntent && (
           <div role="status" className="rounded border border-border bg-muted/40 p-3 text-sm">
-            <span className="font-medium">Collection {collectionIntent.status}</span>
-            <span className="ml-2 text-muted-foreground">UGX {Number(collectionIntent.amount_minor || 0).toLocaleString()}</span>
-            {collectionIntent.failure_reason && <p className="mt-1 text-red-700">{collectionIntent.failure_reason}</p>}
+            <p className="font-medium">Provider: {collectionIntent.provider_status || 'pending'} · Ledger: {collectionIntent.status === 'settled' ? 'posted' : 'not posted'}</p>
+            <p className="mt-1 text-muted-foreground">Requested: {formatCurrency(collectionIntent.amount_minor ?? collectionIntent.amountUgx ?? 0, 'UGX')}</p>
+            <p className="text-muted-foreground">Provider confirmed: {collectionIntent.provider_amount_minor == null
+              ? 'Not available'
+              : formatProviderAmount(collectionIntent.provider_amount_minor, collectionIntent.provider_currency)}</p>
+            <p className="text-muted-foreground">Credited to member ledger: {collectionIntent.ledger_amount_minor == null
+              ? 'Not posted'
+              : formatCurrency(collectionIntent.ledger_amount_minor, 'UGX')}</p>
+            {collectionIntent.provider_amount_minor != null && Number(collectionIntent.provider_amount_minor) !== Number(collectionIntent.amount_minor) && (
+              <p className="mt-1 text-amber-800">
+                Provider-reported difference from requested: {formatCurrency(Math.abs(Number(collectionIntent.amount_minor) - Number(collectionIntent.provider_amount_minor)), 'UGX')}.
+                {Number(collectionIntent.provider_amount_minor) < Number(collectionIntent.amount_minor) ? ' Less was confirmed.' : ' More was confirmed; it was not posted.'}
+              </p>
+            )}
+            {collectionIntent.failure_reason && <p className="mt-1 text-amber-800">{collectionIntent.failure_reason}</p>}
+            {collectionIntent.status === 'review' && <button type="button" onClick={recheckCollection} disabled={collectionRechecking} className="mt-2 rounded border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50">{collectionRechecking ? 'Checking MarzPay…' : 'Recheck payment and ledger'}</button>}
           </div>
         )}
       </section>
