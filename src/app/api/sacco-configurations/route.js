@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { MARZPAY_SETTLEMENT_ACCOUNT_KEY } from '@/lib/payments/settlement-account.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-configurations — List all SACCO configuration toggles
@@ -19,11 +20,27 @@ export async function GET(request) {
       params.push(category);
     }
 
-    const result = await runWithOrganizationContext(
-      perm.auth.organizationId,
-      () => query(sql, params)
-    );
-    return NextResponse.json({ success: true, data: result.rows });
+    const result = await runWithOrganizationContext(perm.auth.organizationId, async () => {
+      const [configurations, settlementAccounts] = await Promise.all([
+        query(sql, params),
+        query(
+          `SELECT id, name, type, currency
+             FROM accounts
+            WHERE organization_id = $1 AND type = 'mobile_money'
+              AND currency = 'UGX' AND is_active = true
+              AND status = 'active'
+            ORDER BY name`,
+          [perm.auth.organizationId]
+        ),
+      ]);
+      return { configurations, settlementAccounts };
+    });
+    return NextResponse.json({
+      success: true,
+      data: result.configurations.rows,
+      settlementAccounts: result.settlementAccounts.rows,
+      canManage: perm.auth.role === 'superadmin',
+    });
   } catch (error) {
     console.error('[Config] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -47,6 +64,13 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'config_key is required' }, { status: 400 });
     }
     let normalizedConfigValue = config_value;
+    if (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY) {
+      if (typeof config_value !== 'string' || (config_value !== '' &&
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(config_value))) {
+        return NextResponse.json({ success: false, error: 'Select a valid organization settlement account' }, { status: 400 });
+      }
+      normalizedConfigValue = config_value;
+    }
     if (config_key === 'transfers.approval_threshold') {
       const amount = typeof config_value === 'object' && config_value !== null
         ? Number(config_value.amount)
@@ -109,6 +133,18 @@ export async function POST(request) {
       if (context.rows[0]?.organization_id !== auth.organizationId) {
         throw Object.assign(new Error('Authenticated organization context is missing or inconsistent. Please sign in again.'), { status: 403 });
       }
+      if (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY && normalizedConfigValue) {
+        const account = await client.query(
+          `SELECT id FROM accounts
+            WHERE id = $1 AND organization_id = $2
+              AND type = 'mobile_money' AND currency = 'UGX'
+              AND is_active = true AND status = 'active'`,
+          [normalizedConfigValue, auth.organizationId]
+        );
+        if (!account.rows[0]) {
+          throw Object.assign(new Error('Settlement account must be an active UGX mobile-money account belonging to your organization'), { status: 400 });
+        }
+      }
       const actor = await client.query('SELECT organization_id FROM users WHERE id = $1', [auth.userId]);
       if (actor.rows[0]?.organization_id !== auth.organizationId) {
         throw Object.assign(new Error('Your account is not linked to the active organization. Sign out and sign in again.'), { status: 403 });
@@ -128,10 +164,10 @@ export async function POST(request) {
           auth.organizationId,
           config_key,
           JSON.stringify(normalizedConfigValue !== undefined ? normalizedConfigValue : true),
-          label || null,
-          description || null,
-          config_type || (config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
-          category || 'general',
+          label || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'MarzPay settlement account' : null),
+          description || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'Organization account used for MarzPay collections and disbursements' : null),
+          config_type || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'text' : config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
+          category || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'accounts' : 'general'),
           auth.userId,
         ]
       );

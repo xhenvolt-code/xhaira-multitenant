@@ -1,6 +1,7 @@
 import { getPool } from '@/lib/db.js';
 import { validateWithdrawal } from '@/lib/account-rules-engine.js';
 import { getMarzpayDisbursement, isMarzpayConfigured, judgeMarzpayCollection, sendMarzpayMoney } from '@/lib/payments/marzpay.js';
+import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
 
 const OPEN_STATUSES = ['created', 'processing', 'review'];
 
@@ -16,28 +17,17 @@ function normalizeUgandaPhone(value) {
   return /^256[37]\d{8}$/.test(digits) ? `+${digits}` : null;
 }
 
-export async function createMobileMoneyDisbursement({ amountUgx, phone, settlementAccountId, memberAccountId, idempotencyKey, userId, callbackUrl }) {
+export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAccountId, idempotencyKey, userId, callbackUrl }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(settlementAccountId || '')) ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
-    return { ok: false, status: 400, error: 'Select a valid settlement account and member account' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
+    return { ok: false, status: 400, error: 'Select a valid member account' };
   }
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
   if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
 
   const pool = getPool();
-  const accountCheck = await pool.query(
-    `SELECT a.id
-       FROM accounts a
-       JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
-       WHERE a.id = $1 AND a.currency = 'UGX' AND a.is_active = true
-         AND ma.currency = 'UGX' AND ma.status = 'active'`,
-    [settlementAccountId, memberAccountId]
-  );
-  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX settlement account and active UGX member account' };
-
   const existing = await pool.query(
     `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id
        FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
@@ -45,11 +35,28 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, settleme
   );
   if (existing.rows[0]) {
     const intent = existing.rows[0];
-    if (intent.direction !== 'disbursement' || Number(intent.amount_minor) !== amountUgx || intent.settlement_account_id !== settlementAccountId || intent.member_account_id !== memberAccountId) {
+    if (intent.direction !== 'disbursement' || Number(intent.amount_minor) !== amountUgx || intent.member_account_id !== memberAccountId) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
     }
     return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx };
   }
+
+  const settlementAccount = await getMarzpaySettlementAccount();
+  if (!settlementAccount) {
+    return { ok: false, status: 409, error: 'Configure an active UGX MarzPay settlement account in organization settings before sending money' };
+  }
+  const settlementAccountId = settlementAccount.id;
+  const accountCheck = await pool.query(
+    `SELECT a.id
+       FROM accounts a
+       JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
+       WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
+         AND ma.organization_id = public.current_organization_id()
+         AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
+         AND ma.currency = 'UGX' AND ma.status = 'active'`,
+    [settlementAccountId, memberAccountId]
+  );
+  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX member account; verify the organization settlement account in settings' };
 
   const client = await pool.connect();
   let intent;
@@ -66,7 +73,7 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, settleme
       const existingIntent = duplicate.rows[0];
       await client.query('COMMIT');
       if (existingIntent.direction !== 'disbursement' || Number(existingIntent.amount_minor) !== amountUgx ||
-          existingIntent.settlement_account_id !== settlementAccountId || existingIntent.member_account_id !== memberAccountId) {
+          existingIntent.member_account_id !== memberAccountId) {
         return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
       }
       return { ok: true, duplicate: true, id: existingIntent.id, status: existingIntent.status, amountUgx };
@@ -108,7 +115,7 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, settleme
       await client.query('COMMIT');
       const existingIntent = conflictingIntent.rows[0];
       if (!existingIntent || existingIntent.direction !== 'disbursement' || Number(existingIntent.amount_minor) !== amountUgx ||
-          existingIntent.settlement_account_id !== settlementAccountId || existingIntent.member_account_id !== memberAccountId) {
+          existingIntent.member_account_id !== memberAccountId) {
         return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
       }
       return { ok: true, duplicate: true, id: existingIntent.id, status: existingIntent.status, amountUgx };

@@ -3,6 +3,7 @@ import { requirePermission } from '@/lib/permissions.js';
 import { getPool } from '@/lib/db.js';
 import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js';
 import { isMarzpayConfigured } from '@/lib/payments/marzpay.js';
+import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
@@ -25,6 +26,7 @@ export async function GET(request) {
   const requestedLimit = Number(searchParams.get('limit') || 50);
   const limit = Math.min(Math.max(Number.isInteger(requestedLimit) ? requestedLimit : 50, 1), 100);
   return runWithOrganizationContext(permission.auth.organizationId, async () => {
+    const settlementAccount = await getMarzpaySettlementAccount();
     const result = await getPool().query(
         `SELECT id, direction, amount_minor, provider_amount_minor, ledger_amount_minor,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
@@ -39,6 +41,7 @@ export async function GET(request) {
       success: true,
       configured: isMarzpayConfigured(),
       enabled: isMarzpayConfigured(),
+      settlementAccount,
       data: result.rows,
     });
   });
@@ -52,7 +55,6 @@ export async function POST(request) {
     const result = await createMobileMoneyCollection({
       amountUgx: Number(body?.amountUgx),
       phone: typeof body?.phone === 'string' ? body.phone : '',
-      settlementAccountId: body?.settlementAccountId,
       memberAccountId: body?.memberAccountId,
       idempotencyKey: request.headers.get('idempotency-key'),
       userId: permission.auth.userId,

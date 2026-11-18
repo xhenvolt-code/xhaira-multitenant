@@ -1,5 +1,6 @@
 import { getPool } from '@/lib/db.js';
 import { collectMarzpayMoney, getMarzpayCollection, isMarzpayConfigured, judgeMarzpayCollection } from '@/lib/payments/marzpay.js';
+import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
 import { syncMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
 
 const OPEN_STATUSES = ['created', 'processing', 'review'];
@@ -16,25 +17,15 @@ function normalizeUgandaPhone(value) {
   return /^256[37]\d{8}$/.test(digits) ? `+${digits}` : null;
 }
 
-export async function createMobileMoneyCollection({ amountUgx, phone, settlementAccountId, memberAccountId, idempotencyKey, userId, callbackUrl }) {
+export async function createMobileMoneyCollection({ amountUgx, phone, memberAccountId, idempotencyKey, userId, callbackUrl }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(settlementAccountId || '')) ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
-    return { ok: false, status: 400, error: 'Select a valid settlement account and member account' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
+    return { ok: false, status: 400, error: 'Select a valid member account' };
   }
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
   if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
-
-  const accountCheck = await getPool().query(
-    `SELECT a.id FROM accounts a
-     JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
-     WHERE a.id = $1 AND a.currency = 'UGX' AND a.is_active = true
-       AND ma.currency = 'UGX' AND ma.status = 'active'`,
-    [settlementAccountId, memberAccountId]
-  );
-  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX settlement account and active UGX member account' };
 
   const existing = await getPool().query(
     "SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1",
@@ -42,11 +33,38 @@ export async function createMobileMoneyCollection({ amountUgx, phone, settlement
   );
   if (existing.rows[0]) {
     const intent = existing.rows[0];
-    if (intent.direction !== 'collection' || Number(intent.amount_minor) !== amountUgx || intent.settlement_account_id !== settlementAccountId || intent.member_account_id !== memberAccountId) {
+    if (intent.direction !== 'collection' || Number(intent.amount_minor) !== amountUgx || intent.member_account_id !== memberAccountId) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx: Number(intent.amount_minor) };
   }
+
+  const settlementAccount = await getMarzpaySettlementAccount();
+  if (!settlementAccount) {
+    return { ok: false, status: 409, error: 'Configure an active UGX MarzPay settlement account in organization settings before collecting payments' };
+  }
+  const schema = await getPool().query(
+    `SELECT COUNT(*)::int AS column_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'payment_intents'
+        AND column_name = ANY($1::text[])`,
+    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor']]
+  );
+  if (schema.rows[0]?.column_count !== 4) {
+    return { ok: false, status: 503, error: 'Payment reconciliation schema is not ready. No MarzPay request was sent; apply migration 961 and retry.' };
+  }
+  const settlementAccountId = settlementAccount.id;
+  const accountCheck = await getPool().query(
+    `SELECT a.id FROM accounts a
+     JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
+     WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
+       AND ma.organization_id = public.current_organization_id()
+       AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
+       AND ma.currency = 'UGX' AND ma.status = 'active'`,
+    [settlementAccountId, memberAccountId]
+  );
+  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX member account; verify the organization settlement account in settings' };
 
   const inserted = await getPool().query(
     `INSERT INTO payment_intents
@@ -59,7 +77,7 @@ export async function createMobileMoneyCollection({ amountUgx, phone, settlement
   if (!inserted.rows[0]) {
     const duplicate = await getPool().query('SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1', [idempotencyKey]);
     if (!duplicate.rows[0]) return { ok: false, status: 409, error: 'Could not reserve this idempotency key' };
-    if (duplicate.rows[0].direction !== 'collection' || Number(duplicate.rows[0].amount_minor) !== amountUgx || duplicate.rows[0].settlement_account_id !== settlementAccountId || duplicate.rows[0].member_account_id !== memberAccountId) {
+    if (duplicate.rows[0].direction !== 'collection' || Number(duplicate.rows[0].amount_minor) !== amountUgx || duplicate.rows[0].member_account_id !== memberAccountId) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: duplicate.rows[0].id, status: duplicate.rows[0].status, amountUgx: Number(duplicate.rows[0].amount_minor) };

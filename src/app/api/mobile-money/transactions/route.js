@@ -5,6 +5,7 @@ import { isMarzpayConfigured } from '@/lib/payments/marzpay.js';
 import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js';
 import { createMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
 import { isDatabaseConnectionError } from '@/lib/db.js';
+import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
@@ -24,18 +25,13 @@ export async function GET(request) {
   const permission = await requirePermission(request, 'finance.view');
   if (permission instanceof NextResponse) return permission;
   return runWithOrganizationContext(permission.auth.organizationId, async () => {
-    const accounts = await getPool().query(
-      `SELECT id, name, type, currency, is_active
-         FROM accounts
-        WHERE currency = 'UGX' AND is_active = true
-        ORDER BY name`
-    );
+    const settlementAccount = await getMarzpaySettlementAccount();
     return NextResponse.json({
       success: true,
       configured: isMarzpayConfigured(),
       collectionsEnabled: isMarzpayConfigured(),
       disbursementsEnabled: isMarzpayConfigured(),
-      accounts: accounts.rows,
+      settlementAccount,
     });
   });
 }
@@ -60,7 +56,6 @@ export async function POST(request) {
   const input = {
     amountUgx: Number(body?.amountUgx),
     phone: typeof body?.phone === 'string' ? body.phone : '',
-    settlementAccountId: body?.settlementAccountId,
     memberAccountId: body?.memberAccountId,
     idempotencyKey: request.headers.get('idempotency-key'),
     userId: permission.auth.userId,

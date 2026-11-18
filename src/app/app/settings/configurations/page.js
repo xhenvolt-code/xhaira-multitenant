@@ -17,6 +17,7 @@ const CATEGORY_LABELS = {
 };
 
 const CATEGORY_ORDER = ['general', 'members', 'accounts', 'loans', 'transfers', 'ui', 'notifications'];
+const MARZPAY_SETTLEMENT_ACCOUNT_KEY = 'payments.marzpay.settlement_account_id';
 const POLICY_OPTIONS = {
   'groups.requirement': [['required', 'Members must belong to a group'], ['optional', 'Group membership is optional'], ['disabled', 'Groups are disabled']],
   'groups.nature': [['member_type', 'Groups can borrow and save'], ['sub_organization', 'Groups contain individual members'], ['both', 'Both group models']],
@@ -48,6 +49,10 @@ export default function SACCOConfigurationsPage() {
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState({});
   const [pendingChanges, setPendingChanges] = useState({});
+  const [settlementAccounts, setSettlementAccounts] = useState([]);
+  const [settlementAccountId, setSettlementAccountId] = useState('');
+  const [settlementAccountSaving, setSettlementAccountSaving] = useState(false);
+  const [canManage, setCanManage] = useState(false);
 
   const fetchConfigs = async () => {
     setLoading(true);
@@ -56,9 +61,15 @@ export default function SACCOConfigurationsPage() {
       const res = await fetchWithAuth('/api/sacco-configurations');
       const json = await res.json();
       if (!json.success) throw new Error(json.error || 'Failed to load configurations.');
-      setConfigs(json.data || []);
+      const configurations = json.data || [];
+      const settlementConfig = configurations.find(config => config.config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY);
+      setConfigs(configurations);
+      setSettlementAccounts(json.settlementAccounts || []);
+      setSettlementAccountId(typeof settlementConfig?.config_value === 'string' ? settlementConfig.config_value : '');
+      setCanManage(json.canManage === true);
     } catch (error) {
       setConfigs([]);
+      setSettlementAccounts([]);
       setLoadError(error.message || 'Failed to load configurations.');
       toast.error(error.message || 'Failed to load configurations');
     } finally {
@@ -131,7 +142,33 @@ export default function SACCOConfigurationsPage() {
     }
   };
 
-  const grouped = configs.reduce((acc, c) => {
+  const saveSettlementAccount = async () => {
+    setSettlementAccountSaving(true);
+    try {
+      const res = await fetchWithAuth('/api/sacco-configurations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_key: MARZPAY_SETTLEMENT_ACCOUNT_KEY,
+          config_value: settlementAccountId,
+          label: 'MarzPay settlement account',
+          description: 'Organization account used for MarzPay collections and disbursements',
+          config_type: 'text',
+          category: 'accounts',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Could not save settlement account.');
+      toast.success('Settlement account saved');
+      await fetchConfigs();
+    } catch (error) {
+      toast.error(error.message || 'Could not save settlement account');
+    } finally {
+      setSettlementAccountSaving(false);
+    }
+  };
+
+  const grouped = configs.filter(config => config.config_key !== MARZPAY_SETTLEMENT_ACCOUNT_KEY).reduce((acc, c) => {
     const cat = c.category || 'general';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(c);
@@ -177,6 +214,44 @@ export default function SACCOConfigurationsPage() {
           {Object.keys(pendingChanges).length} unsaved change{Object.keys(pendingChanges).length !== 1 ? 's' : ''}.
         </div>
       )}
+
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-foreground">MarzPay settlement account</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Choose the organization’s active UGX mobile-money account once. Mobile-money collections and withdrawals will use it automatically.
+            Bank and cash balances should remain separate when they represent different real funds.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <select
+            value={settlementAccountId}
+            onChange={event => setSettlementAccountId(event.target.value)}
+            disabled={!canManage || settlementAccountSaving}
+            className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-50"
+          >
+            <option value="">Select an active UGX mobile-money account</option>
+            {settlementAccountId && !settlementAccounts.some(account => account.id === settlementAccountId) && (
+              <option value={settlementAccountId}>Previously selected account is no longer available</option>
+            )}
+            {settlementAccounts.map(account => (
+              <option key={account.id} value={account.id}>{account.name} · {account.type}</option>
+            ))}
+          </select>
+          {canManage && (
+            <button
+              type="button"
+              onClick={saveSettlementAccount}
+              disabled={settlementAccountSaving}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {settlementAccountSaving ? 'Saving…' : 'Save settlement account'}
+            </button>
+          )}
+        </div>
+        {!canManage && <p className="text-xs text-muted-foreground">Only the organization superadmin can change this setting.</p>}
+        {!settlementAccounts.length && <p className="text-xs text-amber-700">Create or activate an organization mobile-money account with UGX currency before selecting a settlement account.</p>}
+      </section>
 
       <div className="space-y-6">
         {CATEGORY_ORDER.map(category => {

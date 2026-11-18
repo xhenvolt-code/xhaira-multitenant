@@ -16,10 +16,9 @@ function formatProviderAmount(amount, currency) {
 
 export default function TransactionModeDialog({ action, account, onClose, onManual, onSuccess }) {
   const [step, setStep] = useState('choose');
-  const [settings, setSettings] = useState({ configured: false, collectionsEnabled: false, disbursementsEnabled: false, accounts: [] });
+  const [settings, setSettings] = useState({ configured: false, collectionsEnabled: false, disbursementsEnabled: false, settlementAccount: null });
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
-  const [settlementAccountId, setSettlementAccountId] = useState('');
   const [intent, setIntent] = useState(null);
   const [busy, setBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
@@ -65,7 +64,6 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
           action,
           amountUgx: Number(amount),
           phone,
-          settlementAccountId,
           memberAccountId: account.memberAccountId,
         }),
       });
@@ -148,6 +146,8 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
           {!settings.configured && <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">MarzPay is not configured on this server.</p>}
           {settings.configured && !automaticEnabled && <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">MarzPay credentials are not configured for this flow.</p>}
           {settings.configured && automaticEnabled && <p className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">Credentials are configured. MarzPay will confirm whether this merchant can perform the requested {isDeposit ? 'collection' : 'disbursement'}.</p>}
+          {automaticEnabled && !settings.settlementAccount && <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">The organization must configure an active UGX MarzPay settlement account in Settings before sending this request.</p>}
+          {settings.settlementAccount && <p className="text-xs text-muted-foreground">Organization settlement account: {settings.settlementAccount.name}</p>}
           {!isDeposit && !canWithdraw && <p className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">Withdrawals are not permitted for this member account type.</p>}
           {isDeposit && settings.configured && automaticEnabled && <p className="text-xs text-muted-foreground">The member will receive a mobile-money payment prompt. The savings ledger updates only after MarzPay confirms payment.</p>}
           {!isDeposit && settings.configured && automaticEnabled && <p className="text-xs text-muted-foreground">MarzPay disbursement access must be enabled for your merchant account. The savings ledger updates only after payout confirmation.</p>}
@@ -158,16 +158,10 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
             <label className="block text-sm">Amount (UGX)
               <input className={inputClass} required type="number" min="1" step="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
             </label>
-            <label className="block text-sm">Settlement account (UGX)
-              <select className={inputClass} required value={settlementAccountId} onChange={e => setSettlementAccountId(e.target.value)}>
-                <option value="">Select account…</option>
-                {(settings.accounts || []).map(item => <option key={item.id} value={item.id}>{item.name} · {item.type}</option>)}
-              </select>
-            </label>
             {error && <p role="alert" className="flex items-start gap-2 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</p>}
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setStep('choose')} className="flex-1 rounded-lg border border-border py-2 text-sm hover:bg-muted">Back</button>
-              <button type="submit" disabled={busy || !automaticEnabled || !settings.accounts?.length || (!isDeposit && !canWithdraw)} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-700 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50">
+              <button type="submit" disabled={busy || !automaticEnabled || !settings.settlementAccount || (!isDeposit && !canWithdraw)} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-emerald-700 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50">
                 {busy && <RefreshCw className="h-4 w-4 animate-spin" />}{busy ? 'Starting…' : isDeposit ? 'Request payment' : 'Send money'}
               </button>
             </div>

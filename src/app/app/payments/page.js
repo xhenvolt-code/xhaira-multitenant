@@ -21,11 +21,13 @@ export default function PaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [showNewPayment, setShowNewPayment] = useState(false);
-  const [collectionMeta, setCollectionMeta] = useState({ configured: false, enabled: false });
+  const [collectionMeta, setCollectionMeta] = useState({ configured: false, enabled: false, settlementAccount: null });
+  const [collectionIntents, setCollectionIntents] = useState([]);
+  const [collectionChecks, setCollectionChecks] = useState({});
+  const [collectionCheckErrors, setCollectionCheckErrors] = useState({});
   const [members, setMembers] = useState([]);
   const [memberAccounts, setMemberAccounts] = useState([]);
-  const [mobileAccounts, setMobileAccounts] = useState([]);
-  const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', settlementAccountId: '', phone: '', amountUgx: '' });
+  const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', phone: '', amountUgx: '' });
   const [collectionIntent, setCollectionIntent] = useState(null);
   const [collectionBusy, setCollectionBusy] = useState(false);
   const [collectionRechecking, setCollectionRechecking] = useState(false);
@@ -38,16 +40,17 @@ export default function PaymentsPage() {
     Promise.all([
       fetchWithAuth('/api/payment-collections'),
       fetchWithAuth('/api/members?status=active&limit=100'),
-      fetchWithAuth('/api/accounts'),
-    ]).then(([collection, memberList, accountList]) => {
+    ]).then(([collection, memberList]) => {
       if (!active) return;
-      setCollectionMeta({ configured: collection.configured === true, enabled: collection.enabled === true });
+      setCollectionMeta({
+        configured: collection.configured === true,
+        enabled: collection.enabled === true,
+        settlementAccount: collection.settlementAccount || null,
+      });
+      setCollectionIntents(collection.data || []);
       setMembers(memberList.success ? memberList.data || [] : []);
-      setMobileAccounts(accountList.success
-        ? (accountList.data || []).filter(account => account.currency === 'UGX' && account.is_active)
-        : []);
     }).catch(() => {
-      if (active) setCollectionError('Unable to load payment account options.');
+      if (active) setCollectionError('Unable to load payment options.');
     });
     return () => { active = false; };
   }, []);
@@ -82,7 +85,6 @@ export default function PaymentsPage() {
         body: JSON.stringify({
           amountUgx: Number(collectionForm.amountUgx),
           phone: collectionForm.phone,
-          settlementAccountId: collectionForm.settlementAccountId,
           memberAccountId: collectionForm.memberAccountId,
         }),
       });
@@ -100,6 +102,10 @@ export default function PaymentsPage() {
         provider_currency: result.provider_currency,
         failure_reason: result.failure_reason,
       });
+      setCollectionIntents(current => [
+        { id: result.id, status: result.status, provider_status: result.provider_status, amount_minor: result.amountUgx, created_at: new Date().toISOString() },
+        ...current.filter(intent => intent.id !== result.id),
+      ]);
     } catch (error) {
       setCollectionError(error.message || 'Could not start mobile-money collection.');
     } finally {
@@ -114,10 +120,28 @@ export default function PaymentsPage() {
       const result = await fetchWithAuth(`/api/payment-collections/${collectionIntent.id}`);
       if (!result.success) throw new Error(result.error || 'Could not recheck payment status.');
       setCollectionIntent(result.data);
+      setCollectionIntents(current => current.map(intent => intent.id === result.data.id ? result.data : intent));
     } catch (error) {
       setCollectionError(error.message || 'Could not recheck payment status.');
     } finally {
       setCollectionRechecking(false);
+    }
+  };
+
+  const recheckCollectionIntent = async (intentId) => {
+    setCollectionChecks(current => ({ ...current, [intentId]: true }));
+    setCollectionCheckErrors(current => ({ ...current, [intentId]: '' }));
+    try {
+      const result = await fetchWithAuth(`/api/payment-collections/${intentId}`);
+      if (!result.success) throw new Error(result.error || 'Could not recheck payment status.');
+      setCollectionIntents(current => current.map(intent => intent.id === intentId ? result.data : intent));
+      if (result.reconciliationError) {
+        setCollectionCheckErrors(current => ({ ...current, [intentId]: result.reconciliationError }));
+      }
+    } catch (error) {
+      setCollectionCheckErrors(current => ({ ...current, [intentId]: error.message || 'Could not recheck payment status.' }));
+    } finally {
+      setCollectionChecks(current => ({ ...current, [intentId]: false }));
     }
   };
 
@@ -163,6 +187,11 @@ export default function PaymentsPage() {
             No payment request can be sent until the server explicitly enables MarzPay collections.
           </p>
         )}
+        {collectionMeta.enabled && !collectionMeta.settlementAccount && (
+          <p role="status" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            Configure an active UGX mobile-money MarzPay settlement account in Settings → SACCO policies before starting collections.
+          </p>
+        )}
 
         {collectionError && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{collectionError}</p>}
 
@@ -181,13 +210,12 @@ export default function PaymentsPage() {
               {memberAccounts.map(account => <option key={account.id} value={account.id}>{account.account_number} · {account.account_type}</option>)}
             </select>
           </label>
-          <label className="text-sm text-muted-foreground">
+          <div className="text-sm text-muted-foreground">
             Settlement account
-            <select required value={collectionForm.settlementAccountId} onChange={event => setCollectionForm(form => ({ ...form, settlementAccountId: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground">
-              <option value="">Select active UGX settlement account</option>
-              {mobileAccounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.type}</option>)}
-            </select>
-          </label>
+            <p className="mt-1 rounded border border-border bg-background px-3 py-2 text-foreground">
+              {collectionMeta.settlementAccount?.name || 'Not configured in organization settings'}
+            </p>
+          </div>
           <label className="text-sm text-muted-foreground">
             Payer phone
             <input required inputMode="tel" autoComplete="tel" value={collectionForm.phone} onChange={event => setCollectionForm(form => ({ ...form, phone: event.target.value }))} placeholder="07xx xxx xxx" className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
@@ -197,7 +225,7 @@ export default function PaymentsPage() {
             <input required type="number" min="1" step="1" value={collectionForm.amountUgx} onChange={event => setCollectionForm(form => ({ ...form, amountUgx: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
           </label>
           <div className="flex items-end">
-            <button type="submit" disabled={!collectionMeta.enabled || collectionBusy || members.length === 0 || mobileAccounts.length === 0} className="flex w-full items-center justify-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" disabled={!collectionMeta.enabled || !collectionMeta.settlementAccount || collectionBusy || members.length === 0} className="flex w-full items-center justify-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
               <Smartphone className="h-4 w-4" /> {collectionBusy ? 'Starting…' : 'Request payment'}
             </button>
           </div>
@@ -221,6 +249,54 @@ export default function PaymentsPage() {
             )}
             {collectionIntent.failure_reason && <p className="mt-1 text-amber-800">{collectionIntent.failure_reason}</p>}
             {collectionIntent.status === 'review' && <button type="button" onClick={recheckCollection} disabled={collectionRechecking} className="mt-2 rounded border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50">{collectionRechecking ? 'Checking MarzPay…' : 'Recheck payment and ledger'}</button>}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-border bg-card">
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="font-semibold text-foreground">Recent MarzPay collections</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Provider completion and ledger posting are separate. Recheck open or review items before retrying.</p>
+        </div>
+        {collectionIntents.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground">No mobile-money collections found.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {collectionIntents.map(intent => (
+              <div key={intent.id} className="space-y-2 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-foreground">{formatCurrency(intent.amount_minor, 'UGX')} · {intent.status}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Provider: {intent.provider_status || 'unknown'} · Ledger: {intent.status === 'settled' ? 'posted' : 'not posted'}
+                      {intent.phone_masked ? ` · ${intent.phone_masked}` : ''}
+                    </p>
+                  </div>
+                  {['created', 'processing', 'review'].includes(intent.status) && (
+                    <button
+                      type="button"
+                      onClick={() => recheckCollectionIntent(intent.id)}
+                      disabled={collectionChecks[intent.id]}
+                      className="rounded border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      {collectionChecks[intent.id] ? 'Checking…' : 'Recheck MarzPay'}
+                    </button>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Requested: {formatCurrency(intent.amount_minor, 'UGX')} · Provider confirmed: {intent.provider_amount_minor == null
+                    ? 'not available'
+                    : formatProviderAmount(intent.provider_amount_minor, intent.provider_currency)} · Ledger posted: {intent.ledger_amount_minor == null
+                    ? 'no'
+                    : formatCurrency(intent.ledger_amount_minor, 'UGX')}
+                </div>
+                {intent.provider_status && ['completed', 'successful', 'success'].includes(String(intent.provider_status).toLowerCase()) && intent.status !== 'settled' && (
+                  <p className="text-xs font-medium text-amber-800">MarzPay reports completion, but no ledger posting is recorded. Reconcile this intent before starting another payment.</p>
+                )}
+                {intent.failure_reason && <p className="text-xs text-amber-800">{intent.failure_reason}</p>}
+                {collectionCheckErrors[intent.id] && <p role="alert" className="text-xs text-red-700">{collectionCheckErrors[intent.id]}</p>}
+              </div>
+            ))}
           </div>
         )}
       </section>
