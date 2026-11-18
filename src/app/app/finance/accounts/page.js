@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, Wallet, X } from 'lucide-react';
+import { Plus, Wallet, X, Landmark } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
 import { useToast } from '@/components/ui/Toast';
@@ -55,6 +55,19 @@ export default function AccountsPage() {
         <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">
           {showForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />} {showForm ? 'Cancel' : 'New Account'}
         </button>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 text-blue-900 sm:flex-row sm:items-center sm:justify-between dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+        <div className="flex items-start gap-3">
+          <Landmark className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold">Configure MarzPay settlement</p>
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-200">Create or activate an organization mobile-money account in UGX, then choose it as the settlement account.</p>
+          </div>
+        </div>
+        <Link href="/app/settings/configurations#marzpay-settlement" className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-medium text-white hover:bg-blue-700">
+          Set settlement account
+        </Link>
       </div>
 
       {showForm && (

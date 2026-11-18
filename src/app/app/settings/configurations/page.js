@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Save, ArrowLeft } from 'lucide-react';
+import { Save, ArrowLeft, Plus } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
@@ -254,7 +254,7 @@ export default function SACCOConfigurationsPage() {
         </div>
       )}
 
-      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+      <section id="marzpay-settlement" className="scroll-mt-6 rounded-xl border border-border bg-card p-5 space-y-4">
         <div>
           <h2 className="font-semibold text-foreground">MarzPay settlement account</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -289,7 +289,14 @@ export default function SACCOConfigurationsPage() {
           )}
         </div>
         {!canManage && <p className="text-xs text-muted-foreground">Only the organization superadmin can change this setting.</p>}
-        {!settlementAccounts.length && <p className="text-xs text-amber-700">Create or activate an organization mobile-money account with UGX currency before selecting a settlement account.</p>}
+        {!settlementAccounts.length && (
+          <div className="flex flex-col items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+            <p>Create an active organization mobile-money account in UGX first, then return here to select it.</p>
+            <Link href="/app/finance/accounts" className="inline-flex shrink-0 items-center gap-1 font-medium underline">
+              <Plus className="h-4 w-4" /> Create account
+            </Link>
+          </div>
+        )}
       </section>
 
       <section className="rounded-xl border border-border bg-card p-5 space-y-4">

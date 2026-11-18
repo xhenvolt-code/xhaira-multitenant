@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Save, User, Lock, Bell, DollarSign, Palette, ChevronRight } from 'lucide-react';
+import { Save, User, Lock, Bell, DollarSign, Palette, ChevronRight, Landmark } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import Link from 'next/link';
 
@@ -38,10 +38,11 @@ export default function SettingsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {[
           { href: '/app/settings/financial', icon: DollarSign, label: 'Financial', desc: 'Currency & formatting' },
+          { href: '/app/settings/configurations#marzpay-settlement', icon: Landmark, label: 'Payments & settlement', desc: 'Choose the organization account used for MarzPay collections' },
           { href: '/app/settings/appearance', icon: Palette, label: 'Appearance', desc: 'Theme & colors' },
           { href: '/app/settings/member-fields', icon: User, label: 'Member fields', desc: 'Configure collected member information' },
           { href: '/app/settings/member-documents', icon: Lock, label: 'Member documents', desc: 'Configure private document collection' },
-          { href: '/app/settings/configurations', icon: Save, label: 'SACCO policies', desc: 'Groups, accounts, and organization policies' },
+          { href: '/app/settings/configurations', icon: Save, label: 'SACCO policies', desc: 'Groups, membership, and organization policies' },
         ].map(item => (
           <Link key={item.href} href={item.href} className="flex items-center justify-between p-4 bg-card border border-border rounded-xl hover:bg-muted/50 transition group">
             <div className="flex items-center gap-3">
