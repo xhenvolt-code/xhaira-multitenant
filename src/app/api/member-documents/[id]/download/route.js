@@ -6,9 +6,12 @@ import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
 
-async function getCloudinaryAccount(accountName) {
+async function getCloudinaryAccount(organizationId, accountName) {
   try {
-    const accounts = await query('SELECT * FROM cloud_accounts WHERE is_active = true ORDER BY is_primary DESC');
+    const accounts = await query(
+      'SELECT * FROM cloud_accounts WHERE organization_id = $1 AND is_active = true ORDER BY is_primary DESC',
+      [organizationId]
+    );
     const match = accounts.rows.find((account) => account.account_name === accountName || account.cloud_name === accountName);
     if (match) return match;
   } catch {}
@@ -24,11 +27,14 @@ export async function GET(request, { params }) {
     if (perm instanceof NextResponse) return perm;
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const { id } = await params;
-    const result = await query('SELECT * FROM member_documents WHERE id = $1', [id]);
+    const result = await query(
+      'SELECT * FROM member_documents WHERE id = $1 AND organization_id = $2',
+      [id, perm.auth.organizationId]
+    );
     const document = result.rows[0];
     if (!document) return NextResponse.json({ success: false, error: 'Document not found' }, { status: 404 });
 
-    const account = await getCloudinaryAccount(document.cloudinary_account);
+    const account = await getCloudinaryAccount(perm.auth.organizationId, document.cloudinary_account);
     cloudinary.config({ cloud_name: account.cloud_name, api_key: account.api_key, api_secret: account.api_secret });
     const format = document.mime_type === 'application/pdf' ? 'pdf' : document.mime_type === 'image/png' ? 'png' : 'jpg';
     const signedUrl = cloudinary.utils.private_download_url(document.public_id, format, {

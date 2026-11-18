@@ -29,8 +29,9 @@ export async function GET(request) {
 
       const [applicantResult, guarantorRule] = await Promise.all([
         query(
-          `SELECT id FROM members WHERE id = $1 AND status = 'active'`,
-          [memberId]
+          `SELECT id FROM members
+            WHERE id = $1 AND organization_id = $2 AND status = 'active'`,
+          [memberId, permission.auth.organizationId]
         ),
         getRule('LOAN', 'guarantors_required'),
       ]);
@@ -47,6 +48,7 @@ export async function GET(request) {
         `SELECT m.id, m.full_name, m.membership_number, m.phone
            FROM members m
           WHERE m.status = 'active'
+            AND m.organization_id = $3
             AND m.member_kind = 'individual'
             AND m.id <> $2
             AND (
@@ -58,19 +60,22 @@ export async function GET(request) {
               SELECT 1
                 FROM member_group_links candidate_link
                WHERE candidate_link.member_id = m.id
+                 AND candidate_link.organization_id = $3
                  AND candidate_link.group_id IN (
                    SELECT applicant_link.group_id
                      FROM member_group_links applicant_link
                     WHERE applicant_link.member_id = $2
+                      AND applicant_link.organization_id = $3
                    UNION
                    SELECT applicant_group.id
                      FROM member_groups applicant_group
                     WHERE applicant_group.group_member_id = $2
+                      AND applicant_group.organization_id = $3
                  )
             )
           ORDER BY lower(m.full_name), m.id
           LIMIT ${MAX_RESULTS}`,
-        [escapeLikePrefix(search.toLowerCase()), memberId]
+        [escapeLikePrefix(search.toLowerCase()), memberId, permission.auth.organizationId]
       );
 
       return NextResponse.json({ success: true, data: result.rows, requiredCount });

@@ -30,7 +30,7 @@ export default function MembersPage() {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (statusFilter) params.set('status', statusFilter);
-      const res = await fetchWithAuth(`/api/members?${params}`);
+      const res = await fetchWithAuth(`/api/members?${params}`, { cache: 'no-store' });
       const json = await res.json();
       if (json.success) setMembers(json.data || []);
       else {

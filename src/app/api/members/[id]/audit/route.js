@@ -17,11 +17,12 @@ export async function GET(request, { params }) {
     const result = await query(
       `SELECT al.*, u.name as performed_by_name, u.email as performed_by_email
        FROM member_audit_log al
-       LEFT JOIN users u ON al.performed_by = u.id
-       WHERE al.member_id = $1
+       LEFT JOIN users u ON al.performed_by = u.id AND u.organization_id = al.organization_id
+       WHERE al.member_id = $1 AND al.organization_id = $2
+         AND EXISTS (SELECT 1 FROM members m WHERE m.id = $1 AND m.organization_id = $2)
        ORDER BY al.created_at DESC
-       LIMIT $2`,
-      [id, limit]
+       LIMIT $3`,
+      [id, perm.auth.organizationId, limit]
     );
 
     return NextResponse.json({ success: true, data: result.rows });

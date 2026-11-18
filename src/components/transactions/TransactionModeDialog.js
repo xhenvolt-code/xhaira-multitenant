@@ -75,6 +75,7 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
         failure_reason: result.failure_reason,
         amount_minor: result.amountUgx,
         provider_amount_minor: result.provider_amount_minor,
+        provider_fee_minor: result.provider_fee_minor,
         ledger_amount_minor: result.ledger_amount_minor,
         provider_currency: result.provider_currency,
       });
@@ -179,13 +180,20 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
             <p className="text-sm text-muted-foreground">Provider confirmed: {intent?.provider_amount_minor == null
               ? 'Not available'
               : formatProviderAmount(intent.provider_amount_minor, intent.provider_currency)}</p>
+            <p className="text-sm text-muted-foreground">Provider fee (paid by payer): {intent?.provider_fee_minor == null
+              ? 'Not confirmed'
+              : formatCurrency(intent.provider_fee_minor, 'UGX')}</p>
             <p className="text-sm text-muted-foreground">Credited to member ledger: {intent?.ledger_amount_minor == null
               ? 'Not posted'
               : formatCurrency(intent.ledger_amount_minor, 'UGX')}</p>
             {intent?.provider_amount_minor != null && Number(intent.provider_amount_minor) !== Number(intent.amount_minor) && (
               <p className="mt-1 text-xs text-amber-800">
                 Provider-reported difference from requested: {formatCurrency(Math.abs(Number(intent.amount_minor) - Number(intent.provider_amount_minor)), 'UGX')}.
-                {Number(intent.provider_amount_minor) < Number(intent.amount_minor) ? ' Less was confirmed.' : ' More was confirmed; it was not posted.'}
+                {Number(intent.provider_amount_minor) < Number(intent.amount_minor)
+                  ? ' Less was confirmed; only the confirmed amount is credited.'
+                  : intent.status === 'settled'
+                    ? ' This matches the configured provider fee; the net requested amount was credited.'
+                    : ' This exceeds the configured fee; it was held for review.'}
               </p>
             )}
             {intent?.failure_reason && <p className="mt-2 text-sm text-red-700">{intent.failure_reason}</p>}

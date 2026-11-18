@@ -3,12 +3,14 @@ import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { transfer } from '@/lib/transaction-service.js';
 import { validateTransfer } from '@/lib/rule-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/member-transfers — List member-to-member transfers
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const memberId = searchParams.get('member_id');
@@ -16,8 +18,8 @@ export async function GET(request) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
     const offset = (page - 1) * limit;
 
-    let whereClause = `WHERE t.transaction_type = 'transfer'`;
-    const params = [];
+    let whereClause = `WHERE t.organization_id = $1 AND t.transaction_type = 'transfer'`;
+    const params = [perm.auth.organizationId];
 
     if (memberId) {
       params.push(memberId);
@@ -34,12 +36,12 @@ export async function GET(request) {
               receiver_ma.id as receiver_account_id, receiver_ma.account_number as receiver_account,
               receiver_m.id as receiver_id, receiver_m.full_name as receiver_name
        FROM transactions t
-       JOIN ledger_entries sender_le ON sender_le.transaction_id = t.id AND sender_le.entry_type = 'DEBIT' AND sender_le.member_account_id IS NOT NULL
-       JOIN ledger_entries receiver_le ON receiver_le.transaction_id = t.id AND receiver_le.entry_type = 'CREDIT' AND receiver_le.member_account_id IS NOT NULL
-       LEFT JOIN member_accounts sender_ma ON sender_le.member_account_id = sender_ma.id
-       LEFT JOIN members sender_m ON sender_ma.member_id = sender_m.id
-       LEFT JOIN member_accounts receiver_ma ON receiver_le.member_account_id = receiver_ma.id
-       LEFT JOIN members receiver_m ON receiver_ma.member_id = receiver_m.id
+       JOIN ledger_entries sender_le ON sender_le.transaction_id = t.id AND sender_le.organization_id = $1 AND sender_le.entry_type = 'DEBIT' AND sender_le.member_account_id IS NOT NULL
+       JOIN ledger_entries receiver_le ON receiver_le.transaction_id = t.id AND receiver_le.organization_id = $1 AND receiver_le.entry_type = 'CREDIT' AND receiver_le.member_account_id IS NOT NULL
+       JOIN member_accounts sender_ma ON sender_le.member_account_id = sender_ma.id AND sender_ma.organization_id = $1
+       JOIN members sender_m ON sender_ma.member_id = sender_m.id AND sender_m.organization_id = $1
+       JOIN member_accounts receiver_ma ON receiver_le.member_account_id = receiver_ma.id AND receiver_ma.organization_id = $1
+       JOIN members receiver_m ON receiver_ma.member_id = receiver_m.id AND receiver_m.organization_id = $1
        ${whereClause}
        ORDER BY t.created_at DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -47,6 +49,7 @@ export async function GET(request) {
     );
 
     return NextResponse.json({ success: true, data: result.rows, pagination: { page, limit } });
+    });
   } catch (error) {
     console.error('[Member Transfers] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -58,6 +61,7 @@ export async function POST(request) {
   try {
     const perm = await requirePermission(request, 'finance.manage');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
     const { sender_account_id, receiver_account_id, amount, description } = body;
@@ -78,7 +82,8 @@ export async function POST(request) {
     const senderAcct = await query(
       `SELECT ma.member_id, m.full_name as name
        FROM member_accounts ma JOIN members m ON ma.member_id = m.id
-       WHERE ma.id = $1`, [sender_account_id]
+       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2`,
+      [sender_account_id, perm.auth.organizationId]
     );
     if (senderAcct.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Sender account not found' }, { status: 404 });
@@ -87,7 +92,8 @@ export async function POST(request) {
     const receiverAcct = await query(
       `SELECT ma.member_id, m.full_name as name
        FROM member_accounts ma JOIN members m ON ma.member_id = m.id
-       WHERE ma.id = $1`, [receiver_account_id]
+       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2`,
+      [receiver_account_id, perm.auth.organizationId]
     );
     if (receiverAcct.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Receiver account not found' }, { status: 404 });
@@ -118,6 +124,7 @@ export async function POST(request) {
     });
 
     return NextResponse.json({ success: true, data: result }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Member Transfers] POST error:', error.message);
     const status = error.message.includes('Insufficient') || error.message.includes('same account') ? 400

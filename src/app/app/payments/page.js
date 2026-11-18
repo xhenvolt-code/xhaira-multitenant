@@ -98,6 +98,7 @@ export default function PaymentsPage() {
         provider_status: result.provider_status,
         amount_minor: result.amountUgx,
         provider_amount_minor: result.provider_amount_minor,
+        provider_fee_minor: result.provider_fee_minor,
         ledger_amount_minor: result.ledger_amount_minor,
         provider_currency: result.provider_currency,
         failure_reason: result.failure_reason,
@@ -238,13 +239,20 @@ export default function PaymentsPage() {
             <p className="text-muted-foreground">Provider confirmed: {collectionIntent.provider_amount_minor == null
               ? 'Not available'
               : formatProviderAmount(collectionIntent.provider_amount_minor, collectionIntent.provider_currency)}</p>
+            <p className="text-muted-foreground">Provider fee (paid by payer): {collectionIntent.provider_fee_minor == null
+              ? 'Not confirmed'
+              : formatCurrency(collectionIntent.provider_fee_minor, 'UGX')}</p>
             <p className="text-muted-foreground">Credited to member ledger: {collectionIntent.ledger_amount_minor == null
               ? 'Not posted'
               : formatCurrency(collectionIntent.ledger_amount_minor, 'UGX')}</p>
             {collectionIntent.provider_amount_minor != null && Number(collectionIntent.provider_amount_minor) !== Number(collectionIntent.amount_minor) && (
               <p className="mt-1 text-amber-800">
                 Provider-reported difference from requested: {formatCurrency(Math.abs(Number(collectionIntent.amount_minor) - Number(collectionIntent.provider_amount_minor)), 'UGX')}.
-                {Number(collectionIntent.provider_amount_minor) < Number(collectionIntent.amount_minor) ? ' Less was confirmed.' : ' More was confirmed; it was not posted.'}
+                {Number(collectionIntent.provider_amount_minor) < Number(collectionIntent.amount_minor)
+                  ? ' Less was confirmed; only the confirmed amount is credited.'
+                  : collectionIntent.status === 'settled'
+                    ? ' This matches the configured provider fee; the net requested amount was credited.'
+                    : ' This exceeds the configured fee; it was held for review.'}
               </p>
             )}
             {collectionIntent.failure_reason && <p className="mt-1 text-amber-800">{collectionIntent.failure_reason}</p>}
@@ -290,6 +298,9 @@ export default function PaymentsPage() {
                     ? 'no'
                     : formatCurrency(intent.ledger_amount_minor, 'UGX')}
                 </div>
+                {Number(intent.provider_fee_minor || 0) > 0 && (
+                  <p className="text-xs text-muted-foreground">Provider fee paid by payer: {formatCurrency(intent.provider_fee_minor, 'UGX')}</p>
+                )}
                 {intent.provider_status && ['completed', 'successful', 'success'].includes(String(intent.provider_status).toLowerCase()) && intent.status !== 'settled' && (
                   <p className="text-xs font-medium text-amber-800">MarzPay reports completion, but no ledger posting is recorded. Reconcile this intent before starting another payment.</p>
                 )}

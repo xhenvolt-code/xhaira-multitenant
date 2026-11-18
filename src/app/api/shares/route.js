@@ -7,11 +7,13 @@ import { NextResponse }      from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { query }             from '@/lib/db.js';
 import { purchaseShares }    from '@/lib/interest-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const memberId = searchParams.get('member_id') || '';
@@ -19,8 +21,8 @@ export async function GET(request) {
     const limit    = Math.min(200, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset   = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
-    const args = [];
+    let where = 'WHERE s.organization_id = $1 AND m.organization_id = $1';
+    const args = [perm.auth.organizationId];
 
     if (memberId) {
       args.push(memberId);
@@ -34,21 +36,25 @@ export async function GET(request) {
       query(
         `SELECT s.*, m.full_name, m.membership_number
          FROM shares s
-         JOIN members m ON m.id = s.member_id
+         JOIN members m ON m.id = s.member_id AND m.organization_id = s.organization_id
          ${where}
          ORDER BY s.created_at DESC
          LIMIT $${args.length - 1} OFFSET $${args.length}`,
         args
       ),
       query(
-        `SELECT COUNT(*) AS total FROM shares s ${where}`,
+        `SELECT COUNT(*) AS total FROM shares s
+         JOIN members m ON m.id = s.member_id AND m.organization_id = s.organization_id
+         ${where}`,
         countArgs
       ),
       query(
-        `SELECT * FROM v_member_shares
-         ${memberId ? 'WHERE member_id = $1' : ''}
-         ORDER BY total_units DESC`,
-        memberId ? [memberId] : []
+        `SELECT vs.*
+         FROM v_member_shares vs
+         JOIN members m ON m.id = vs.member_id AND m.organization_id = $1
+         ${memberId ? 'WHERE vs.member_id = $2' : ''}
+         ORDER BY vs.total_units DESC`,
+        memberId ? [perm.auth.organizationId, memberId] : [perm.auth.organizationId]
       ),
     ]);
 
@@ -58,6 +64,7 @@ export async function GET(request) {
       data:       dataResult.rows,
       summary:    summaryResult.rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
     });
   } catch (error) {
     console.error('[Shares] GET error:', error.message);

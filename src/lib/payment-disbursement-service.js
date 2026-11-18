@@ -45,6 +45,17 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
   if (!settlementAccount) {
     return { ok: false, status: 409, error: 'Configure an active UGX MarzPay settlement account in organization settings before sending money' };
   }
+  const schema = await pool.query(
+    `SELECT COUNT(*)::int AS column_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'payment_intents'
+        AND column_name = ANY($1::text[])`,
+    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor']]
+  );
+  if (schema.rows[0]?.column_count !== 5) {
+    return { ok: false, status: 503, error: 'Payment reconciliation schema is not ready. No MarzPay request was sent; apply migrations 961 and 962, then retry.' };
+  }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = await pool.query(
     `SELECT a.id

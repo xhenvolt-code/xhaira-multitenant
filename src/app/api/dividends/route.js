@@ -7,11 +7,13 @@ import { NextResponse }         from 'next/server';
 import { requirePermission }    from '@/lib/permissions.js';
 import { query }                from '@/lib/db.js';
 import { distributeDividends }  from '@/lib/interest-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const memberId       = searchParams.get('member_id') || '';
@@ -21,8 +23,8 @@ export async function GET(request) {
     const limit          = Math.min(200, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset         = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
-    const args = [];
+    let where = 'WHERE d.organization_id = $1 AND m.organization_id = $1';
+    const args = [perm.auth.organizationId];
 
     if (memberId) {
       args.push(memberId);
@@ -44,16 +46,17 @@ export async function GET(request) {
       query(
         `SELECT d.*, m.full_name, m.membership_number
          FROM dividends d
-         JOIN members m ON m.id = d.member_id
+        JOIN members m ON m.id = d.member_id AND m.organization_id = d.organization_id
          ${where}
          ORDER BY d.created_at DESC
          LIMIT $${args.length - 1} OFFSET $${args.length}`,
         args
       ),
-      query(`SELECT COUNT(*) AS total FROM dividends d ${where}`, countArgs),
+      query(`SELECT COUNT(*) AS total FROM dividends d JOIN members m ON m.id = d.member_id AND m.organization_id = d.organization_id ${where}`, countArgs),
       query(
         `SELECT period, basis, SUM(amount) AS total_distributed, COUNT(*) AS member_count
          FROM dividends d
+         JOIN members m ON m.id = d.member_id AND m.organization_id = d.organization_id
          ${where}
          GROUP BY period, basis
          ORDER BY period DESC`,
@@ -67,6 +70,7 @@ export async function GET(request) {
       data:       dataResult.rows,
       summary:    summaryResult.rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
     });
   } catch (error) {
     console.error('[Dividends] GET error:', error.message);

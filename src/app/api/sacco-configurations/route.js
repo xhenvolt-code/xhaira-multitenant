@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { MARZPAY_SETTLEMENT_ACCOUNT_KEY } from '@/lib/payments/settlement-account.js';
+import { MARZPAY_COLLECTION_FEE_KEY, MARZPAY_SETTLEMENT_ACCOUNT_KEY } from '@/lib/payments/settlement-account.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-configurations — List all SACCO configuration toggles
@@ -70,6 +70,14 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Select a valid organization settlement account' }, { status: 400 });
       }
       normalizedConfigValue = config_value;
+    }
+    if (config_key === MARZPAY_COLLECTION_FEE_KEY) {
+      const basisPoints = config_value?.basis_points;
+      if (config_value?.version !== 1 || config_value?.fee_bearer !== 'payer' ||
+          !Number.isInteger(basisPoints) || basisPoints < 0 || basisPoints > 10000) {
+        return NextResponse.json({ success: false, error: 'Collection fee must be a version 1 payer-borne percentage from 0% to 100%' }, { status: 400 });
+      }
+      normalizedConfigValue = { version: 1, basis_points: basisPoints, fee_bearer: 'payer' };
     }
     if (config_key === 'transfers.approval_threshold') {
       const amount = typeof config_value === 'object' && config_value !== null
@@ -164,10 +172,18 @@ export async function POST(request) {
           auth.organizationId,
           config_key,
           JSON.stringify(normalizedConfigValue !== undefined ? normalizedConfigValue : true),
-          label || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'MarzPay settlement account' : null),
-          description || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'Organization account used for MarzPay collections and disbursements' : null),
-          config_type || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'text' : config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
-          category || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ? 'accounts' : 'general'),
+          label || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY
+            ? 'MarzPay settlement account'
+            : config_key === MARZPAY_COLLECTION_FEE_KEY ? 'MarzPay collection fee' : null),
+          description || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY
+            ? 'Organization account used for MarzPay collections and disbursements'
+            : config_key === MARZPAY_COLLECTION_FEE_KEY
+              ? 'Configured provider surcharge paid by the payer; recorded separately from the net amount credited to the organization and member.'
+              : null),
+          config_type || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY
+            ? 'json'
+            : config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
+          category || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY ? 'accounts' : 'general'),
           auth.userId,
         ]
       );

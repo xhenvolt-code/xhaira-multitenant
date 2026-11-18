@@ -93,12 +93,12 @@ export default function MemberDetailPage() {
     setNewAccount((current) => ({ ...current, account_type_id: '' }));
     try {
       const [memberRes, accountsRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
-        fetchWithAuth(`/api/members/${id}`),
-        fetchWithAuth(`/api/members/${id}/accounts`),
+        fetchWithAuth(`/api/members/${id}`, { cache: 'no-store' }),
+        fetchWithAuth(`/api/members/${id}/accounts`, { cache: 'no-store' }),
         fetchWithAuth('/api/account-types', { cache: 'no-store' }),
-        fetchWithAuth('/api/member-field-configs'),
-        fetchWithAuth(`/api/member-documents?member_id=${id}`),
-        fetchWithAuth('/api/member-document-configs'),
+        fetchWithAuth('/api/member-field-configs', { cache: 'no-store' }),
+        fetchWithAuth(`/api/member-documents?member_id=${id}`, { cache: 'no-store' }),
+        fetchWithAuth('/api/member-document-configs', { cache: 'no-store' }),
       ]);
       const memberJson = await memberRes.json();
       const accountsJson = await accountsRes.json();

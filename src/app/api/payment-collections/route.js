@@ -28,7 +28,7 @@ export async function GET(request) {
   return runWithOrganizationContext(permission.auth.organizationId, async () => {
     const settlementAccount = await getMarzpaySettlementAccount();
     const result = await getPool().query(
-        `SELECT id, direction, amount_minor, provider_amount_minor, ledger_amount_minor,
+        `SELECT id, direction, amount_minor, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
               failure_reason, phone_masked, transaction_id, created_at, settled_at
          FROM payment_intents
@@ -63,7 +63,7 @@ export async function POST(request) {
     if (!result.ok) return NextResponse.json({ success: false, error: result.error, id: result.id, status: result.state }, { status: result.status });
     const intent = result.id
       ? (await getPool().query(
-        `SELECT status, provider_status, provider_amount_minor, ledger_amount_minor,
+        `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
                 provider_currency, failure_reason
            FROM payment_intents WHERE id = $1`,
         [result.id]
@@ -75,6 +75,7 @@ export async function POST(request) {
       status: intent?.status || result.status,
       provider_status: intent?.provider_status,
       provider_amount_minor: intent?.provider_amount_minor,
+      provider_fee_minor: intent?.provider_fee_minor,
       ledger_amount_minor: intent?.ledger_amount_minor,
       provider_currency: intent?.provider_currency,
       failure_reason: intent?.failure_reason || result.error,

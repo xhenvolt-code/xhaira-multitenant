@@ -27,7 +27,7 @@ export async function GET(request, { params }) {
       `SELECT vb.*
          FROM v_member_account_balances vb
          JOIN member_accounts ma ON ma.id = vb.member_account_id
-        WHERE vb.member_id = $1 AND ma.organization_id = $2
+        WHERE vb.member_id = $1 AND ma.member_id = $1 AND ma.organization_id = $2
           ${activeOnly ? `AND vb.status = 'active'` : ''}
         ORDER BY vb.opened_at DESC`,
       [id, perm.auth.organizationId]
@@ -66,7 +66,8 @@ export async function POST(request, { params }) {
     }
     if (member.rows[0].member_kind === 'group') {
       const groupPolicy = await query(`SELECT config_key, config_value FROM sacco_configurations
-        WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+        WHERE organization_id = $1 AND config_key IN ('groups.requirement', 'groups.nature')`,
+        [perm.auth.organizationId]);
       const policies = Object.fromEntries(groupPolicy.rows.map((row) => [row.config_key, row.config_value]));
       if (policies['groups.requirement'] === 'disabled' || policies['groups.nature'] === 'sub_organization') {
         return NextResponse.json({ success: false, error: 'Group saving and borrowing are disabled by organization policy' }, { status: 400 });

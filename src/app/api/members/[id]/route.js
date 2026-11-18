@@ -4,6 +4,8 @@ import { requirePermission } from '@/lib/permissions.js';
 import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
+const PRIVATE_NO_STORE = { headers: { 'Cache-Control': 'private, no-store' } };
+
 // GET /api/members/[id] — Get member details with accounts
 export async function GET(request, { params }) {
   try {
@@ -17,25 +19,28 @@ export async function GET(request, { params }) {
       query(
         `SELECT m.*, u.name as user_name, u.email as user_email
          FROM members m
-         LEFT JOIN users u ON m.user_id = u.id
-         WHERE m.id = $1`,
-        [id]
+         LEFT JOIN users u ON m.user_id = u.id AND u.organization_id = m.organization_id
+         WHERE m.id = $1 AND m.organization_id = $2`,
+        [id, perm.auth.organizationId]
       ),
       query(
-        `SELECT * FROM member_accounts WHERE member_id = $1 ORDER BY created_at DESC`,
-        [id]
+        `SELECT * FROM member_accounts
+          WHERE member_id = $1 AND organization_id = $2
+          ORDER BY created_at DESC`,
+        [id, perm.auth.organizationId]
       ),
     ]);
 
     if (memberResult.rows.length === 0) {
-      return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
+      return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404, ...PRIVATE_NO_STORE });
     }
 
     const fields = await getMemberFields(perm.auth.organizationId);
     const missingRequiredFields = getMissingRequiredMemberFields(fields, memberResult.rows[0]);
     const requiredDocuments = await query(`SELECT dc.label FROM member_document_type_configs dc
-      WHERE dc.is_enabled AND dc.is_required AND NOT EXISTS
-        (SELECT 1 FROM member_documents md WHERE md.member_id = $1 AND md.document_key = dc.document_key)`, [id]);
+      WHERE dc.organization_id = $2 AND dc.is_enabled AND dc.is_required AND NOT EXISTS
+        (SELECT 1 FROM member_documents md WHERE md.organization_id = $2 AND md.member_id = $1 AND md.document_key = dc.document_key)`,
+      [id, perm.auth.organizationId]);
     const missingDocuments = requiredDocuments.rows.map((row) => row.label);
     return NextResponse.json({
       success: true,
@@ -46,11 +51,11 @@ export async function GET(request, { params }) {
         missing_required_documents: missingDocuments,
         accounts: accountsResult.rows,
       },
-    });
+    }, PRIVATE_NO_STORE);
     });
   } catch (error) {
     console.error('[Members] GET detail error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500, ...PRIVATE_NO_STORE });
   }
 }
 
@@ -66,7 +71,7 @@ export async function PUT(request, { params }) {
     const body = await request.json();
 
     // Get current data for audit
-    const current = await query(`SELECT * FROM members WHERE id = $1`, [id]);
+    const current = await query(`SELECT * FROM members WHERE id = $1 AND organization_id = $2`, [id, auth.organizationId]);
     if (current.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
@@ -141,7 +146,7 @@ export async function PUT(request, { params }) {
          status = COALESCE($28, status),
          custom_fields = $29::jsonb,
          updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $30
        RETURNING *`,
       [
         id, resolvedFullName, first_name || null, last_name || null, other_name || null,
@@ -154,6 +159,7 @@ export async function PUT(request, { params }) {
         next_of_kin_name || null, next_of_kin_phone || null, next_of_kin_relationship || null,
         joined_date || null, exit_date || null, exit_reason || null, suspended_reason || null,
         notes || null, status || null, JSON.stringify(customFields),
+        auth.organizationId,
       ]
     );
 
@@ -198,8 +204,10 @@ export async function DELETE(request, { params }) {
     const { id } = await params;
 
     const result = await query(
-      `UPDATE members SET status = 'exited', exit_date = CURRENT_DATE, updated_at = NOW() WHERE id = $1 RETURNING id, full_name, status`,
-      [id]
+      `UPDATE members SET status = 'exited', exit_date = CURRENT_DATE, updated_at = NOW()
+        WHERE id = $1 AND organization_id = $2
+        RETURNING id, full_name, status`,
+      [id, auth.organizationId]
     );
 
     if (result.rows.length === 0) {

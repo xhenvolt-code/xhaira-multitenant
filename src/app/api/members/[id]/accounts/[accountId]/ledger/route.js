@@ -17,8 +17,9 @@ export async function GET(request, { params }) {
       `SELECT ma.*, m.full_name as member_name
        FROM member_accounts ma
        JOIN members m ON m.id = ma.member_id
-       WHERE ma.id = $1 AND ma.member_id = $2`,
-      [accountId, id]
+       WHERE ma.id = $1 AND ma.member_id = $2
+         AND ma.organization_id = $3 AND m.organization_id = $3`,
+      [accountId, id, perm.auth.organizationId]
     );
     if (account.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Account not found for this member' }, { status: 404 });
@@ -34,18 +35,22 @@ export async function GET(request, { params }) {
         `SELECT le.*, t.description as tx_description, t.transaction_type, t.reference, t.created_at as tx_date
          FROM ledger_entries le
          JOIN transactions t ON t.id = le.transaction_id
-         WHERE le.member_account_id = $1
+         WHERE le.member_account_id = $1 AND le.organization_id = $4
+           AND t.organization_id = $4
          ORDER BY le.created_at DESC
          LIMIT $2 OFFSET $3`,
-        [accountId, limit, offset]
+        [accountId, limit, offset, perm.auth.organizationId]
       ),
       query(
-        `SELECT COUNT(*) as total FROM ledger_entries WHERE member_account_id = $1`,
-        [accountId]
+        `SELECT COUNT(*) as total FROM ledger_entries
+          WHERE member_account_id = $1 AND organization_id = $2`,
+        [accountId, perm.auth.organizationId]
       ),
       query(
-        `SELECT balance FROM v_member_account_balances WHERE member_account_id = $1`,
-        [accountId]
+        `SELECT vb.balance FROM v_member_account_balances vb
+          JOIN member_accounts ma ON ma.id = vb.member_account_id
+         WHERE vb.member_account_id = $1 AND ma.organization_id = $2`,
+        [accountId, perm.auth.organizationId]
       ),
     ]);
 

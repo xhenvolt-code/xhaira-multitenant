@@ -8,9 +8,12 @@ import { runWithOrganizationContext } from '@/lib/organization-context.js';
 export const runtime = 'nodejs';
 const ALLOWED_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png']);
 
-async function getCloudinaryAccount(accountName) {
+async function getCloudinaryAccount(organizationId, accountName) {
   try {
-    const result = await query('SELECT * FROM cloud_accounts WHERE is_active = true ORDER BY is_primary DESC');
+    const result = await query(
+      'SELECT * FROM cloud_accounts WHERE organization_id = $1 AND is_active = true ORDER BY is_primary DESC',
+      [organizationId]
+    );
     const account = accountName ? result.rows.find((row) => row.account_name === accountName) : result.rows[0];
     if (account) return account;
   } catch {}
@@ -45,9 +48,12 @@ export async function POST(request) {
     if (!file || typeof memberId !== 'string' || typeof documentKey !== 'string') {
       return NextResponse.json({ success: false, error: 'file, member_id, and document_key are required' }, { status: 400 });
     }
-    const member = await query('SELECT id FROM members WHERE id = $1', [memberId]);
+    const member = await query('SELECT id FROM members WHERE id = $1 AND organization_id = $2', [memberId, perm.auth.organizationId]);
     if (!member.rows[0]) return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
-    const configResult = await query('SELECT * FROM member_document_type_configs WHERE document_key = $1', [documentKey]);
+    const configResult = await query(
+      'SELECT * FROM member_document_type_configs WHERE document_key = $1 AND organization_id = $2',
+      [documentKey, perm.auth.organizationId]
+    );
     const docConfig = configResult.rows[0];
     if (!docConfig?.is_enabled) return NextResponse.json({ success: false, error: 'This document type is disabled' }, { status: 400 });
     if (!ALLOWED_MIME.has(file.type) || !docConfig.accepted_mime_types.includes(file.type)) {
@@ -59,7 +65,7 @@ export async function POST(request) {
     const bytes = Buffer.from(await file.arrayBuffer());
     if (!isValidSignature(file.type, bytes)) return NextResponse.json({ success: false, error: 'File content does not match its declared type' }, { status: 415 });
 
-    const account = await getCloudinaryAccount();
+    const account = await getCloudinaryAccount(perm.auth.organizationId);
     cloudinary.config({ cloud_name: account.cloud_name, api_key: account.api_key, api_secret: account.api_secret });
     const publicId = `xhaira/${perm.auth.organizationId}/member-documents/${memberId}/${documentKey}/${randomUUID()}`;
     const resourceType = file.type.startsWith('image/') ? 'image' : 'raw';
@@ -75,10 +81,10 @@ export async function POST(request) {
     });
     const saved = await query(
       `INSERT INTO member_documents
-        (member_id, document_key, original_filename, mime_type, file_size, cloudinary_account, public_id, resource_type, uploaded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (organization_id, member_id, document_key, original_filename, mime_type, file_size, cloudinary_account, public_id, resource_type, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING id, member_id, document_key, original_filename, mime_type, file_size, uploaded_at`,
-      [memberId, documentKey, String(file.name || 'document').slice(0, 255), file.type, file.size,
+      [perm.auth.organizationId, memberId, documentKey, String(file.name || 'document').slice(0, 255), file.type, file.size,
         account.account_name || account.cloud_name, uploaded.public_id, resourceType, perm.auth.userId]
     );
     await query('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)',
@@ -99,7 +105,15 @@ export async function GET(request) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const memberId = new URL(request.url).searchParams.get('member_id');
     if (!memberId) return NextResponse.json({ success: false, error: 'member_id is required' }, { status: 400 });
-    const result = await query('SELECT * FROM member_documents WHERE member_id = $1 ORDER BY uploaded_at DESC', [memberId]);
+    const member = await query(
+      'SELECT id FROM members WHERE id = $1 AND organization_id = $2',
+      [memberId, perm.auth.organizationId]
+    );
+    if (!member.rows[0]) return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
+    const result = await query(
+      'SELECT * FROM member_documents WHERE member_id = $1 AND organization_id = $2 ORDER BY uploaded_at DESC',
+      [memberId, perm.auth.organizationId]
+    );
     await query('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)',
       [perm.auth.userId, 'VIEW', 'member_documents', memberId, JSON.stringify({ document_count: result.rows.length })]);
     const data = result.rows.map((document) => ({ id: document.id, member_id: document.member_id, document_key: document.document_key,

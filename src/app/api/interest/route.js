@@ -7,11 +7,13 @@ import { NextResponse }      from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { query }             from '@/lib/db.js';
 import { accrueInterest }    from '@/lib/interest-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export async function GET(request) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { searchParams } = new URL(request.url);
     const status    = searchParams.get('status') || '';
@@ -21,8 +23,8 @@ export async function GET(request) {
     const limit     = Math.min(200, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset    = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
-    const args = [];
+    let where = 'WHERE ia.organization_id = $1 AND ma.organization_id = $1 AND m.organization_id = $1';
+    const args = [perm.auth.organizationId];
 
     if (status) {
       args.push(status.toUpperCase());
@@ -49,9 +51,9 @@ export async function GET(request) {
                 at.name  AS account_type_name,
                 at.code  AS account_type_code
          FROM interest_accruals ia
-         JOIN member_accounts ma ON ma.id = ia.account_id
-         JOIN members m  ON m.id = ma.member_id
-         JOIN account_types at ON at.id = ma.account_type_id
+         JOIN member_accounts ma ON ma.id = ia.account_id AND ma.organization_id = ia.organization_id
+         JOIN members m  ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+         JOIN account_types at ON at.id = ma.account_type_id AND at.organization_id = ma.organization_id
          ${where}
          ORDER BY ia.created_at DESC
          LIMIT $${args.length - 1} OFFSET $${args.length}`,
@@ -60,7 +62,8 @@ export async function GET(request) {
       query(
         `SELECT COUNT(*) AS total
          FROM interest_accruals ia
-         JOIN member_accounts ma ON ma.id = ia.account_id
+         JOIN member_accounts ma ON ma.id = ia.account_id AND ma.organization_id = ia.organization_id
+         JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
          ${where}`,
         countArgs
       ),
@@ -71,7 +74,8 @@ export async function GET(request) {
            COUNT(CASE WHEN ia.status = 'PENDING' THEN 1 END)              AS pending_count,
            COUNT(CASE WHEN ia.status = 'APPLIED' THEN 1 END)              AS applied_count
          FROM interest_accruals ia
-         JOIN member_accounts ma ON ma.id = ia.account_id
+         JOIN member_accounts ma ON ma.id = ia.account_id AND ma.organization_id = ia.organization_id
+         JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
          ${where}`,
         countArgs
       ),
@@ -84,6 +88,7 @@ export async function GET(request) {
       data:     dataResult.rows,
       summary:  summaryResult.rows[0],
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
     });
   } catch (error) {
     console.error('[Interest] GET error:', error.message);

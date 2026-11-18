@@ -18,6 +18,7 @@ const CATEGORY_LABELS = {
 
 const CATEGORY_ORDER = ['general', 'members', 'accounts', 'loans', 'transfers', 'ui', 'notifications'];
 const MARZPAY_SETTLEMENT_ACCOUNT_KEY = 'payments.marzpay.settlement_account_id';
+const MARZPAY_COLLECTION_FEE_KEY = 'payments.marzpay.collection_fee_rule';
 const POLICY_OPTIONS = {
   'groups.requirement': [['required', 'Members must belong to a group'], ['optional', 'Group membership is optional'], ['disabled', 'Groups are disabled']],
   'groups.nature': [['member_type', 'Groups can borrow and save'], ['sub_organization', 'Groups contain individual members'], ['both', 'Both group models']],
@@ -53,6 +54,8 @@ export default function SACCOConfigurationsPage() {
   const [settlementAccountId, setSettlementAccountId] = useState('');
   const [settlementAccountSaving, setSettlementAccountSaving] = useState(false);
   const [canManage, setCanManage] = useState(false);
+  const [collectionFeePercent, setCollectionFeePercent] = useState('3.00');
+  const [collectionFeeSaving, setCollectionFeeSaving] = useState(false);
 
   const fetchConfigs = async () => {
     setLoading(true);
@@ -63,9 +66,13 @@ export default function SACCOConfigurationsPage() {
       if (!json.success) throw new Error(json.error || 'Failed to load configurations.');
       const configurations = json.data || [];
       const settlementConfig = configurations.find(config => config.config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY);
+      const feeConfig = configurations.find(config => config.config_key === MARZPAY_COLLECTION_FEE_KEY);
       setConfigs(configurations);
       setSettlementAccounts(json.settlementAccounts || []);
       setSettlementAccountId(typeof settlementConfig?.config_value === 'string' ? settlementConfig.config_value : '');
+      if (feeConfig?.config_value?.version === 1 && Number.isInteger(feeConfig.config_value.basis_points)) {
+        setCollectionFeePercent((feeConfig.config_value.basis_points / 100).toFixed(2));
+      }
       setCanManage(json.canManage === true);
     } catch (error) {
       setConfigs([]);
@@ -168,7 +175,39 @@ export default function SACCOConfigurationsPage() {
     }
   };
 
-  const grouped = configs.filter(config => config.config_key !== MARZPAY_SETTLEMENT_ACCOUNT_KEY).reduce((acc, c) => {
+  const saveCollectionFee = async () => {
+    const percent = Number(collectionFeePercent);
+    const basisPoints = Math.round(percent * 100);
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100 || !Number.isInteger(basisPoints)) {
+      toast.error('Enter a collection fee percentage from 0% to 100%.');
+      return;
+    }
+    setCollectionFeeSaving(true);
+    try {
+      const res = await fetchWithAuth('/api/sacco-configurations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_key: MARZPAY_COLLECTION_FEE_KEY,
+          config_value: { version: 1, basis_points: basisPoints, fee_bearer: 'payer' },
+          label: 'MarzPay collection fee',
+          description: 'Configured provider surcharge paid by the payer; recorded separately from the net amount credited to the organization and member.',
+          config_type: 'json',
+          category: 'accounts',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Could not save collection fee.');
+      toast.success('Collection fee saved');
+      await fetchConfigs();
+    } catch (error) {
+      toast.error(error.message || 'Could not save collection fee');
+    } finally {
+      setCollectionFeeSaving(false);
+    }
+  };
+
+  const grouped = configs.filter(config => ![MARZPAY_SETTLEMENT_ACCOUNT_KEY, MARZPAY_COLLECTION_FEE_KEY].includes(config.config_key)).reduce((acc, c) => {
     const cat = c.category || 'general';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(c);
@@ -251,6 +290,41 @@ export default function SACCOConfigurationsPage() {
         </div>
         {!canManage && <p className="text-xs text-muted-foreground">Only the organization superadmin can change this setting.</p>}
         {!settlementAccounts.length && <p className="text-xs text-amber-700">Create or activate an organization mobile-money account with UGX currency before selecting a settlement account.</p>}
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-foreground">MarzPay payer-borne collection fee</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            When MarzPay confirms the requested amount plus exactly this surcharge, the surcharge is recorded as provider fee and the requested net amount is posted to the organization and member ledgers. Other unexplained amounts remain in review.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={collectionFeePercent}
+              onChange={event => setCollectionFeePercent(event.target.value)}
+              disabled={!canManage || collectionFeeSaving}
+              className="w-28 rounded-lg border border-border bg-background px-3 py-2 text-foreground disabled:opacity-50"
+            />
+            %
+          </label>
+          {canManage && (
+            <button
+              type="button"
+              onClick={saveCollectionFee}
+              disabled={collectionFeeSaving}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {collectionFeeSaving ? 'Saving…' : 'Save collection fee'}
+            </button>
+          )}
+        </div>
+        {!canManage && <p className="text-xs text-muted-foreground">Only the organization superadmin can change this setting.</p>}
       </section>
 
       <div className="space-y-6">

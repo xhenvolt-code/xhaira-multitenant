@@ -43,16 +43,20 @@ export async function createMobileMoneyCollection({ amountUgx, phone, memberAcco
   if (!settlementAccount) {
     return { ok: false, status: 409, error: 'Configure an active UGX MarzPay settlement account in organization settings before collecting payments' };
   }
+  const feeBasisPoints = await getMarzpayCollectionFeeBasisPoints();
+  if (feeBasisPoints === null) {
+    return { ok: false, status: 503, error: 'Organization MarzPay collection-fee settings are missing or invalid; no payment was sent' };
+  }
   const schema = await getPool().query(
     `SELECT COUNT(*)::int AS column_count
        FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'payment_intents'
         AND column_name = ANY($1::text[])`,
-    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor']]
+    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor']]
   );
-  if (schema.rows[0]?.column_count !== 4) {
-    return { ok: false, status: 503, error: 'Payment reconciliation schema is not ready. No MarzPay request was sent; apply migration 961 and retry.' };
+  if (schema.rows[0]?.column_count !== 5) {
+    return { ok: false, status: 503, error: 'Payment reconciliation schema is not ready. No MarzPay request was sent; apply migrations 961 and 962, then retry.' };
   }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = await getPool().query(
@@ -140,7 +144,10 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
 
   const lookup = await getMarzpayCollection(row.provider_uuid);
   if (!lookup.ok || !lookup.transaction) return { status: row.status, settled: false, error: safeError(lookup.error) };
-  const verdict = judgeMarzpayCollection(lookup.transaction, Number(row.amount_minor), { allowLowerAmount: true });
+  const verdict = judgeMarzpayCollection(lookup.transaction, Number(row.amount_minor), {
+    allowLowerAmount: true,
+    acceptCompletedAmountMismatch: true,
+  });
 
   if (verdict.state === 'processing') {
     if (Date.now() - new Date(row.created_at).getTime() > 30 * 60 * 1000) {
@@ -150,7 +157,7 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     await pool.query(
       `UPDATE payment_intents
           SET provider_status = $1, provider_amount_minor = $2, provider_currency = $3,
-              provider_mode = $4, updated_at = NOW()
+              provider_mode = $4, provider_fee_minor = 0, updated_at = NOW()
         WHERE id = $5 AND status = ANY($6::text[])`,
       [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, intentId, OPEN_STATUSES]
     );
@@ -160,7 +167,8 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     await pool.query(
       `UPDATE payment_intents
           SET status = 'failed', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, failure_reason = $5, updated_at = NOW()
+              provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
+              failure_reason = $5, updated_at = NOW()
         WHERE id = $6 AND status = ANY($7::text[])`,
       [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
     );
@@ -170,7 +178,8 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     await pool.query(
       `UPDATE payment_intents
           SET status = 'review', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, failure_reason = $5, updated_at = NOW()
+              provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
+              failure_reason = $5, updated_at = NOW()
         WHERE id = $6 AND status = ANY($7::text[])`,
       [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency, verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
     );
@@ -194,7 +203,16 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     const transaction = await client.query(
       `INSERT INTO transactions (description, transaction_type, reference, metadata, created_by)
        VALUES ($1, 'deposit', $2, $3::jsonb, $4) RETURNING id`,
-      ['MarzPay mobile money collection', current.provider_reference, JSON.stringify({ provider: 'marzpay', provider_uuid: current.provider_uuid, payment_intent_id: current.id }), current.created_by]
+      ['MarzPay mobile money collection', current.provider_reference, JSON.stringify({
+        provider: 'marzpay',
+        provider_uuid: current.provider_uuid,
+        payment_intent_id: current.id,
+        requested_amount_minor: Number(current.amount_minor),
+        provider_amount_minor: verdict.providerAmountMinor,
+        provider_fee_minor: verdict.providerFeeMinor,
+        fee_bearer: verdict.providerFeeMinor > 0 ? 'payer' : null,
+        ledger_amount_minor: verdict.ledgerAmountMinor,
+      }), current.created_by]
     );
     const transactionId = transaction.rows[0].id;
     const amount = verdict.ledgerAmountMinor;
@@ -217,11 +235,12 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     await client.query(
       `UPDATE payment_intents
           SET status = 'settled', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, ledger_amount_minor = $5,
-              transaction_id = $6, settled_at = NOW(), failure_reason = NULL, updated_at = NOW()
-        WHERE id = $7`,
+              provider_currency = $3, provider_mode = $4, provider_fee_minor = $5,
+              ledger_amount_minor = $6, transaction_id = $7, settled_at = NOW(),
+              failure_reason = NULL, updated_at = NOW()
+        WHERE id = $8`,
       [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-        verdict.providerMode, amount, transactionId, intentId]
+        verdict.providerMode, verdict.providerFeeMinor, amount, transactionId, intentId]
     );
     await client.query('COMMIT');
     return { status: 'settled', settled: true, error: null };

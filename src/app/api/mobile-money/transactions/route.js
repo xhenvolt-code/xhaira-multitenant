@@ -68,7 +68,7 @@ export async function POST(request) {
       : await createMobileMoneyDisbursement(input);
     const intentDetails = result.id
       ? (await getPool().query(
-        `SELECT status, provider_status, provider_amount_minor, ledger_amount_minor,
+        `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
                 provider_currency, failure_reason
            FROM payment_intents WHERE id = $1`,
         [result.id]
@@ -84,6 +84,7 @@ export async function POST(request) {
       success: true, id: result.id, status: intentDetails?.status || result.state,
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
+      provider_fee_minor: intentDetails?.provider_fee_minor,
       ledger_amount_minor: intentDetails?.ledger_amount_minor,
       provider_currency: intentDetails?.provider_currency,
       failure_reason: result.error || intentDetails?.failure_reason,
@@ -101,6 +102,7 @@ export async function POST(request) {
       success: true, id: result.id, status: intentDetails?.status || result.status,
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
+      provider_fee_minor: intentDetails?.provider_fee_minor,
       ledger_amount_minor: intentDetails?.ledger_amount_minor,
       provider_currency: intentDetails?.provider_currency,
       failure_reason: result.failureReason || intentDetails?.failure_reason,

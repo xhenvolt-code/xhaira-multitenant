@@ -30,6 +30,48 @@ test('settles a completed collection for the actual lower provider amount when e
   assert.equal(verdict.amountDifferenceMinor, 30);
 });
 
+test('posts the requested amount when a completed provider amount includes a surcharge', () => {
+  const verdict = judgeMarzpayCollection(providerTransaction(1030), 1000, {
+    allowLowerAmount: true,
+    acceptCompletedAmountMismatch: true,
+  });
+
+  assert.equal(verdict.state, 'settled');
+  assert.equal(verdict.providerAmountMinor, 1030);
+  assert.equal(verdict.providerFeeMinor, 30);
+  assert.equal(verdict.ledgerAmountMinor, 1000);
+  assert.equal(verdict.amountDifferenceMinor, 30);
+});
+
+test('posts completed collections when the provider amount differs from the request', () => {
+  const overage = judgeMarzpayCollection(providerTransaction(1031), 1000, {
+    allowLowerAmount: true,
+    acceptCompletedAmountMismatch: true,
+  });
+  assert.equal(overage.state, 'settled');
+  assert.equal(overage.ledgerAmountMinor, 1000);
+  assert.equal(overage.providerFeeMinor, 31);
+
+  const partial = judgeMarzpayCollection(providerTransaction(970), 1000, {
+    allowLowerAmount: true,
+    acceptCompletedAmountMismatch: true,
+  });
+  assert.equal(partial.state, 'settled');
+  assert.equal(partial.ledgerAmountMinor, 970);
+  assert.equal(partial.providerFeeMinor, 0);
+});
+
+test('rounds configured provider fees to the nearest whole UGX using integer arithmetic', () => {
+  const verdict = judgeMarzpayCollection(providerTransaction(104), 101, {
+    allowLowerAmount: true,
+    feeBasisPoints: 300,
+  });
+
+  assert.equal(verdict.state, 'settled');
+  assert.equal(verdict.providerFeeMinor, 3);
+  assert.equal(verdict.ledgerAmountMinor, 101);
+});
+
 test('keeps lower amounts in review for disbursements and other strict callers', () => {
   const verdict = judgeMarzpayCollection(providerTransaction(970), 1000);
 

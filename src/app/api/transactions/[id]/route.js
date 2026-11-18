@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/transactions/[id] — Get transaction with all ledger entries
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
+    return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const { id } = await params;
 
@@ -14,20 +16,20 @@ export async function GET(request, { params }) {
       query(
         `SELECT t.*, u.email as created_by_email
          FROM transactions t
-         LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.id = $1`,
-        [id]
+         LEFT JOIN users u ON t.created_by = u.id AND u.organization_id = t.organization_id
+         WHERE t.id = $1 AND t.organization_id = $2`,
+        [id, perm.auth.organizationId]
       ),
       query(
         `SELECT le.*, 
            ma.account_number as member_account_number, ma.account_type as member_account_type,
            a.name as account_name, a.type as system_account_type
          FROM ledger_entries le
-         LEFT JOIN member_accounts ma ON le.member_account_id = ma.id
-         LEFT JOIN accounts a ON le.account_id = a.id
-         WHERE le.transaction_id = $1
+         LEFT JOIN member_accounts ma ON le.member_account_id = ma.id AND ma.organization_id = $2
+         LEFT JOIN accounts a ON le.account_id = a.id AND a.organization_id = $2
+         WHERE le.transaction_id = $1 AND le.organization_id = $2
          ORDER BY le.entry_type, le.created_at`,
-        [id]
+        [id, perm.auth.organizationId]
       ),
     ]);
 
@@ -41,6 +43,7 @@ export async function GET(request, { params }) {
         ...txResult.rows[0],
         entries: entriesResult.rows,
       },
+    });
     });
   } catch (error) {
     console.error('[Transaction Detail] GET error:', error.message);

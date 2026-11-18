@@ -24,8 +24,9 @@ export async function GET(request) {
     const limit    = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset   = (page - 1) * limit;
 
-    let where  = `WHERE vb.status = 'active' AND vb.currency = 'UGX'`;
-    const args = [];
+    let where  = `WHERE vb.status = 'active' AND vb.currency = 'UGX'
+                  AND m.organization_id = $1 AND ma.organization_id = $1`;
+    const args = [perm.auth.organizationId];
 
     if (memberId) {
       args.push(memberId);
@@ -41,8 +42,8 @@ export async function GET(request) {
                 at.allows_withdrawal, at.minimum_balance
          FROM v_member_account_balances vb
          JOIN members m ON m.id = vb.member_id
-         JOIN member_accounts ma ON ma.id = vb.member_account_id
-         JOIN account_types at ON at.id = ma.account_type_id
+         JOIN member_accounts ma ON ma.id = vb.member_account_id AND ma.member_id = m.id
+         JOIN account_types at ON at.id = ma.account_type_id AND at.organization_id = ma.organization_id
          ${where}
          ORDER BY vb.balance DESC
          LIMIT $${args.length - 1} OFFSET $${args.length}`,
@@ -51,7 +52,9 @@ export async function GET(request) {
       query(
         `SELECT COUNT(*) AS total
          FROM v_member_account_balances vb
-         ${where}`,
+        JOIN member_accounts ma ON ma.id = vb.member_account_id AND ma.member_id = vb.member_id
+        JOIN members m ON m.id = ma.member_id
+        ${where}`,
         args.slice(0, -2)
       ),
     ]);

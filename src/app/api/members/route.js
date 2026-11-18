@@ -4,6 +4,8 @@ import { requirePermission } from '@/lib/permissions.js';
 import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
+const PRIVATE_NO_STORE = { headers: { 'Cache-Control': 'private, no-store' } };
+
 // GET /api/members — List all SACCO members
 export async function GET(request) {
   try {
@@ -18,12 +20,15 @@ export async function GET(request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset = (page - 1) * limit;
 
-    let where = `WHERE (m.member_kind <> 'group' OR EXISTS (
-      SELECT 1 FROM member_groups registered_group WHERE registered_group.group_member_id = m.id
+    let where = `WHERE m.organization_id = $1 AND (m.member_kind <> 'group' OR EXISTS (
+      SELECT 1 FROM member_groups registered_group
+       WHERE registered_group.group_member_id = m.id
+         AND registered_group.organization_id = m.organization_id
     ))`;
-    const params = [];
+    const params = [perm.auth.organizationId];
     const groupPolicyResult = await query(`SELECT config_key, config_value FROM sacco_configurations
-      WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+      WHERE organization_id = $1 AND config_key IN ('groups.requirement', 'groups.nature')`,
+      [perm.auth.organizationId]);
     const groupPolicy = Object.fromEntries(groupPolicyResult.rows.map((row) => [row.config_key, row.config_value]));
     if (groupPolicy['groups.requirement'] === 'disabled' || groupPolicy['groups.nature'] === 'sub_organization') {
       where += ` AND m.member_kind = 'individual'`;
@@ -44,13 +49,20 @@ export async function GET(request) {
     const [dataResult, countResult] = await Promise.all([
       query(
         `SELECT m.*, u.name as user_name, u.email as user_email,
-           (SELECT COUNT(*) FROM member_accounts ma WHERE ma.member_id = m.id) as account_count,
-           (SELECT COALESCE(SUM(vb.balance), 0) FROM v_member_account_balances vb WHERE vb.member_id = m.id AND vb.status = 'active') as total_balance,
+           (SELECT COUNT(*) FROM member_accounts ma
+             WHERE ma.member_id = m.id AND ma.organization_id = m.organization_id) as account_count,
+           (SELECT COALESCE(SUM(vb.balance), 0)
+              FROM v_member_account_balances vb
+              JOIN member_accounts ma ON ma.id = vb.member_account_id
+             WHERE vb.member_id = m.id AND ma.organization_id = m.organization_id
+               AND vb.status = 'active') as total_balance,
            ARRAY(SELECT dc.label FROM member_document_type_configs dc
-                  WHERE dc.is_enabled AND dc.is_required AND NOT EXISTS
-                    (SELECT 1 FROM member_documents md WHERE md.member_id = m.id AND md.document_key = dc.document_key)) AS missing_required_documents
+                  WHERE dc.organization_id = m.organization_id AND dc.is_enabled AND dc.is_required AND NOT EXISTS
+                    (SELECT 1 FROM member_documents md
+                      WHERE md.organization_id = m.organization_id
+                        AND md.member_id = m.id AND md.document_key = dc.document_key)) AS missing_required_documents
          FROM members m
-         LEFT JOIN users u ON m.user_id = u.id
+         LEFT JOIN users u ON m.user_id = u.id AND u.organization_id = m.organization_id
          ${where}
          ORDER BY m.created_at DESC
          LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -72,11 +84,11 @@ export async function GET(request) {
       success: true,
       data: members,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    });
+    }, PRIVATE_NO_STORE);
     });
   } catch (error) {
     console.error('[Members] GET error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500, ...PRIVATE_NO_STORE });
   }
 }
 
@@ -119,7 +131,8 @@ export async function POST(request) {
 
     const policies = await query(
       `SELECT config_key, config_value FROM sacco_configurations
-        WHERE config_key IN ('groups.requirement', 'groups.nature')`
+        WHERE organization_id = $1 AND config_key IN ('groups.requirement', 'groups.nature')`,
+      [perm.auth.organizationId]
     );
     const policy = Object.fromEntries(policies.rows.map((row) => [row.config_key, row.config_value]));
     const groupRequirement = policy['groups.requirement'] ?? 'optional';
@@ -134,7 +147,10 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'This organization policy does not link individuals to groups' }, { status: 400 });
     }
     if (member_kind === 'individual' && body.group_id) {
-      const target = await query('SELECT id FROM member_groups WHERE id = $1', [body.group_id]);
+      const target = await query(
+        'SELECT id FROM member_groups WHERE id = $1 AND organization_id = $2',
+        [body.group_id, perm.auth.organizationId]
+      );
       if (!target.rows[0]) return NextResponse.json({ success: false, error: 'Selected group was not found' }, { status: 400 });
     }
 
@@ -157,10 +173,11 @@ export async function POST(request) {
          occupation, employer, monthly_income,
          emergency_contact_name, emergency_contact_phone,
          next_of_kin_name, next_of_kin_phone, next_of_kin_relationship,
-         joined_date, notes, user_id, membership_number, custom_fields, member_kind
+         joined_date, notes, user_id, membership_number, custom_fields, member_kind, organization_id
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27
+         , $28
        ) RETURNING *`,
       [
         resolvedFullName,
@@ -190,15 +207,22 @@ export async function POST(request) {
         membership_number,
         JSON.stringify(validation.customFields),
         member_kind,
+        perm.auth.organizationId,
       ]
       );
 
       const member = result.rows[0];
 
       if (member_kind === 'group') {
-        await client.query('INSERT INTO member_groups (group_member_id, group_name) VALUES ($1, $2)', [member.id, resolvedFullName]);
+        await client.query(
+          'INSERT INTO member_groups (organization_id, group_member_id, group_name) VALUES ($1, $2, $3)',
+          [perm.auth.organizationId, member.id, resolvedFullName]
+        );
       } else if (body.group_id) {
-        await client.query('INSERT INTO member_group_links (group_id, member_id) VALUES ($1, $2)', [body.group_id, member.id]);
+        await client.query(
+          'INSERT INTO member_group_links (organization_id, group_id, member_id) VALUES ($1, $2, $3)',
+          [perm.auth.organizationId, body.group_id, member.id]
+        );
       }
       await client.query('COMMIT');
     } catch (error) {
@@ -219,21 +243,24 @@ export async function POST(request) {
 
     // Auto-open savings account if configured
     const autoOpenSavings = await query(
-      `SELECT config_value FROM sacco_configurations WHERE config_key = 'accounts.auto_open_savings'`
+      `SELECT config_value FROM sacco_configurations
+        WHERE organization_id = $1 AND config_key = 'accounts.auto_open_savings'`,
+      [perm.auth.organizationId]
     ).catch(() => ({ rows: [] }));
 
     if (autoOpenSavings.rows[0]?.config_value === true || autoOpenSavings.rows[0]?.config_value === 'true') {
       const volSavType = await query(
-        `SELECT id FROM account_types WHERE code = 'VOL_SAV' LIMIT 1`
+        `SELECT id FROM account_types WHERE code = 'VOL_SAV' AND organization_id = $1 LIMIT 1`,
+        [perm.auth.organizationId]
       ).catch(() => ({ rows: [] }));
 
       if (volSavType.rows.length > 0) {
         const accNum = `SAV-${membership_number.split('-').slice(-1)[0]}`;
         await query(
-          `INSERT INTO member_accounts (member_id, account_type, account_type_id, account_number, currency, status, opened_at)
-           VALUES ($1, 'savings', $2, $3, 'UGX', 'active', NOW())
+          `INSERT INTO member_accounts (organization_id, member_id, account_type, account_type_id, account_number, currency, status, opened_at)
+           VALUES ($1, $2, 'savings', $3, $4, 'UGX', 'active', NOW())
            ON CONFLICT DO NOTHING`,
-          [member.id, volSavType.rows[0].id, accNum]
+          [perm.auth.organizationId, member.id, volSavType.rows[0].id, accNum]
         ).catch(() => {});
       }
     }

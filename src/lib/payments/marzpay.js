@@ -129,7 +129,7 @@ export function verifyMarzpayWebhook(rawBody, signatureHeader, secret, nowMs = D
   return expected.length === received.length && timingSafeEqual(expected, received) ? 'valid' : 'invalid';
 }
 
-export function judgeMarzpayCollection(transaction, expectedAmount, { allowLowerAmount = false } = {}) {
+export function judgeMarzpayCollection(transaction, expectedAmount, { allowLowerAmount = false, acceptCompletedAmountMismatch = false, feeBasisPoints = 0 } = {}) {
   const status = String(transaction?.status || '').trim().toLowerCase();
   const mode = String(transaction?.mode || '').trim().toLowerCase();
   const providerAmountMinor = Number.isSafeInteger(transaction?.amountMinor) ? transaction.amountMinor : null;
@@ -140,16 +140,36 @@ export function judgeMarzpayCollection(transaction, expectedAmount, { allowLower
   if (!['completed', 'successful', 'success', 'sandbox'].includes(status)) return { state: 'processing', reason: null, ...evidence };
   if ((mode === 'sandbox' || status === 'sandbox') && !allowSandbox) return { state: 'failed', reason: 'Sandbox transactions cannot settle real payments', ...evidence };
   if (providerCurrency !== 'UGX') return { state: 'review', reason: 'Provider currency is not UGX', ...evidence };
-  if (providerAmountMinor === null || providerAmountMinor <= 0 ||
-      providerAmountMinor > expectedAmount ||
-      (providerAmountMinor !== expectedAmount && !allowLowerAmount)) {
+  if (!Number.isSafeInteger(expectedAmount) || expectedAmount <= 0 || providerAmountMinor === null || providerAmountMinor <= 0) {
     return { state: 'review', reason: 'Provider amount does not match the requested amount', ...evidence };
+  }
+  if (!acceptCompletedAmountMismatch && providerAmountMinor < expectedAmount && !allowLowerAmount) {
+    return { state: 'review', reason: 'Provider amount does not match the requested amount', ...evidence };
+  }
+  if (!acceptCompletedAmountMismatch &&
+      (!Number.isSafeInteger(feeBasisPoints) || feeBasisPoints < 0 || feeBasisPoints > 10000)) {
+    return { state: 'review', reason: 'Organization collection-fee configuration is invalid', ...evidence };
+  }
+  const providerFeeMinor = providerAmountMinor > expectedAmount
+    ? acceptCompletedAmountMismatch
+      ? providerAmountMinor - expectedAmount
+      : Number((BigInt(expectedAmount) * BigInt(feeBasisPoints) + 5000n) / 10000n)
+    : 0;
+  const ledgerAmountMinor = acceptCompletedAmountMismatch
+    ? Math.min(providerAmountMinor, expectedAmount)
+    : providerAmountMinor > expectedAmount
+      ? expectedAmount
+      : providerAmountMinor;
+  if (!acceptCompletedAmountMismatch && providerAmountMinor > expectedAmount &&
+      (providerFeeMinor <= 0 || BigInt(expectedAmount) + BigInt(providerFeeMinor) !== BigInt(providerAmountMinor))) {
+    return { state: 'review', reason: 'Provider amount exceeds the request and does not match the configured collection fee', ...evidence };
   }
   return {
     state: 'settled',
     reason: null,
     ...evidence,
-    ledgerAmountMinor: providerAmountMinor,
-    amountDifferenceMinor: expectedAmount - providerAmountMinor,
+    ledgerAmountMinor,
+    providerFeeMinor,
+    amountDifferenceMinor: Math.abs(providerAmountMinor - expectedAmount),
   };
 }
