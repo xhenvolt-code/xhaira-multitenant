@@ -72,10 +72,15 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
         id: result.id,
         status: result.status,
         provider_status: result.provider_status,
+        ledger_status: result.ledger_status,
+        reconciliation_status: result.reconciliation_status,
+        reconciliation_error: result.reconciliation_error,
+        ledger_failure_reason: result.ledger_failure_reason,
         failure_reason: result.failure_reason,
         amount_minor: result.amountUgx,
         provider_amount_minor: result.provider_amount_minor,
         provider_fee_minor: result.provider_fee_minor,
+        provider_fee_confirmed: result.provider_fee_confirmed,
         ledger_amount_minor: result.ledger_amount_minor,
         provider_currency: result.provider_currency,
       });
@@ -174,13 +179,17 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
           <h2 className="text-lg font-semibold">Mobile-money {isDeposit ? 'deposit' : 'withdrawal'}</h2>
           <div className="rounded-lg border border-border bg-muted/30 p-4">
             <p className="font-medium">Provider: {intent?.provider_status || 'pending'}</p>
-            <p className="text-sm">Ledger: {intent?.status === 'settled' ? 'posted' : 'not posted'}</p>
+            <p className="text-sm">Ledger: {isDeposit
+              ? intent?.status === 'settled' ? 'posted' : 'not posted'
+              : intent?.ledger_status === 'posted' ? 'posted' : intent?.ledger_status === 'failed' ? 'posting failed — retry available' : 'not posted'}</p>
+            {!isDeposit && <p className="text-sm">Reconciliation: {intent?.reconciliation_status || 'pending'}</p>}
             <p className="mt-1 text-sm text-muted-foreground">{account.label}</p>
             <p className="mt-2 text-sm text-muted-foreground">Requested: {formatCurrency(intent?.amount_minor ?? amount, 'UGX')}</p>
             <p className="text-sm text-muted-foreground">Provider confirmed: {intent?.provider_amount_minor == null
               ? 'Not available'
               : formatProviderAmount(intent.provider_amount_minor, intent.provider_currency)}</p>
             <p className="text-sm text-muted-foreground">{isDeposit ? 'Provider fee (paid by payer)' : 'Provider fee'}: {intent?.provider_fee_minor == null
+              || (!isDeposit && !intent?.provider_fee_confirmed)
               ? 'Not confirmed'
               : formatCurrency(intent.provider_fee_minor, 'UGX')}</p>
             <p className="text-sm text-muted-foreground">{isDeposit ? 'Credited to member ledger' : 'Debited from member ledger'}: {intent?.ledger_amount_minor == null
@@ -189,19 +198,25 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
             {intent?.provider_amount_minor != null && Number(intent.provider_amount_minor) !== Number(intent.amount_minor) && (
               <p className="mt-1 text-xs text-amber-800">
                 Provider-reported difference from requested: {formatCurrency(Math.abs(Number(intent.amount_minor) - Number(intent.provider_amount_minor)), 'UGX')}.
-                {Number(intent.provider_amount_minor) < Number(intent.amount_minor)
-                  ? ' Less was confirmed; only the confirmed amount is credited.'
-                  : intent.status === 'settled'
-                    ? ' This matches the configured provider fee; the net requested amount was credited.'
-                    : ' This exceeds the configured fee; it was held for review.'}
+                {!isDeposit
+                  ? ' The requested amount is posted to the member ledger; the provider variance is handled separately.'
+                  : Number(intent.provider_amount_minor) < Number(intent.amount_minor)
+                    ? ' Less was confirmed; only the confirmed amount is credited.'
+                    : intent.status === 'settled'
+                      ? ' This matches the configured provider fee; the net requested amount was credited.'
+                      : ' This exceeds the configured fee; it was held for review.'}
               </p>
             )}
             {intent?.failure_reason && <p className="mt-2 text-sm text-red-700">{intent.failure_reason}</p>}
+            {intent?.ledger_failure_reason && <p className="mt-2 text-sm text-red-700">{intent.ledger_failure_reason}</p>}
+            {intent?.reconciliation_error && <p className="mt-2 text-sm text-amber-800">{intent.reconciliation_error}</p>}
             {intent?.provider_message && <p className="mt-2 text-sm text-red-700">{intent.provider_message}</p>}
             {intent?.reconciliationError && <p className="mt-2 text-sm text-amber-800">MarzPay status check: {intent.reconciliationError}</p>}
             {intent?.status === 'processing' && <p className="mt-2 text-xs text-muted-foreground">Waiting for MarzPay confirmation. You can close this window; the transaction remains pending.</p>}
-            {intent?.status === 'review' && <p className="mt-2 text-xs text-amber-800">This transaction needs reconciliation before the ledger is updated.</p>}
-            {intent?.status === 'review' && <button type="button" onClick={recheckIntent} disabled={rechecking} className="mt-3 w-full rounded-lg border border-border py-2 text-sm hover:bg-muted disabled:opacity-50">{rechecking ? 'Checking MarzPay…' : 'Recheck payment and ledger'}</button>}
+            {intent?.ledger_status !== 'posted' && intent?.status === 'review' && <p className="mt-2 text-xs text-amber-800">The ledger is not posted yet. Recheck the provider transaction before retrying.</p>}
+            {(intent?.status === 'review' || intent?.ledger_status === 'failed' ||
+              (intent?.ledger_status === 'posted' && !['matched', 'adjusted'].includes(intent?.reconciliation_status))) &&
+              <button type="button" onClick={recheckIntent} disabled={rechecking} className="mt-3 w-full rounded-lg border border-border py-2 text-sm hover:bg-muted disabled:opacity-50">{rechecking ? 'Checking MarzPay…' : 'Recheck payment and ledger'}</button>}
           </div>
           <button type="button" onClick={onClose} className="w-full rounded-lg border border-border py-2 text-sm hover:bg-muted">Close</button>
         </>}

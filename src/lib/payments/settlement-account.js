@@ -2,6 +2,7 @@ import { getPool } from '@/lib/db.js';
 import { getOrganizationContext } from '@/lib/organization-context.js';
 
 export const MARZPAY_SETTLEMENT_ACCOUNT_KEY = 'payments.marzpay.settlement_account_id';
+export const MARZPAY_RECONCILIATION_ACCOUNT_KEY = 'payments.marzpay.reconciliation_account_id';
 export const MARZPAY_COLLECTION_FEE_KEY = 'payments.marzpay.collection_fee_rule';
 
 async function queryWithOrganizationContext(organizationId, operation) {
@@ -42,6 +43,27 @@ export async function getMarzpaySettlementAccount(organizationId = getOrganizati
           AND a.status = 'active'
         LIMIT 1`,
       [tenantId, MARZPAY_SETTLEMENT_ACCOUNT_KEY]
+    )
+  );
+  return result.rows[0] || null;
+}
+
+export async function getMarzpayReconciliationAccount(organizationId = getOrganizationContext()) {
+  const result = await queryWithOrganizationContext(
+    organizationId,
+    (client, tenantId) => client.query(
+      `SELECT a.id, a.name, a.type, a.currency
+         FROM sacco_configurations c
+         JOIN accounts a ON a.id::text = c.config_value #>> '{}'
+        WHERE c.organization_id = $1
+          AND a.organization_id = $1
+          AND c.config_key = $2
+          AND a.type = 'system'
+          AND a.currency = 'UGX'
+          AND a.is_active = true
+          AND a.status = 'active'
+        LIMIT 1`,
+      [tenantId, MARZPAY_RECONCILIATION_ACCOUNT_KEY]
     )
   );
   return result.rows[0] || null;

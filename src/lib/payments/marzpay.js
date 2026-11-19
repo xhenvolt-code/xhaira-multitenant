@@ -32,9 +32,13 @@ export function normalizeMarzpayTransaction(body, direction = null) {
     : direction === 'collection' ? collection
       : null;
   const amount = preferred?.amount ?? collection.amount ?? disbursement.amount ?? transaction.amount ?? root.amount ?? {};
+  const fee = preferred?.fee ?? transaction.fee ?? collection.fee ?? disbursement.fee ?? root.fee ?? null;
   const raw = amount && typeof amount === 'object'
     ? amount.raw ?? amount.value ?? amount.amount ?? null
     : amount;
+  const rawFee = fee && typeof fee === 'object'
+    ? fee.raw ?? fee.value ?? fee.amount ?? null
+    : fee;
   return {
     uuid: transaction.uuid ?? preferred?.uuid ?? collection.uuid ?? disbursement.uuid ?? null,
     reference: transaction.reference ?? preferred?.reference ?? collection.reference ?? disbursement.reference ?? null,
@@ -43,6 +47,7 @@ export function normalizeMarzpayTransaction(body, direction = null) {
     currency: (amount && typeof amount === 'object' ? amount.currency : null) ??
       preferred?.currency ?? transaction.currency ?? collection.currency ?? disbursement.currency ?? root.currency ?? null,
     amountMinor: normalizeAmountMinor(raw),
+    feeMinor: normalizeAmountMinor(rawFee),
     provider: preferred?.provider ?? collection.provider ?? disbursement.provider ?? transaction.provider ?? null,
     message: transaction.message ?? preferred?.message ?? collection.message ?? disbursement.message ?? root.message ?? null,
   };

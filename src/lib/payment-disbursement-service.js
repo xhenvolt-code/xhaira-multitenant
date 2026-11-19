@@ -1,7 +1,15 @@
 import { getPool } from '@/lib/db.js';
 import { validateWithdrawal } from '@/lib/account-rules-engine.js';
-import { getMarzpayDisbursement, isMarzpayConfigured, judgeMarzpayCollection, sendMarzpayMoney } from '@/lib/payments/marzpay.js';
-import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
+import { getMarzpayDisbursement, isMarzpayConfigured, sendMarzpayMoney } from '@/lib/payments/marzpay.js';
+import {
+  getMarzpayReconciliationAccount,
+  getMarzpaySettlementAccount,
+} from '@/lib/payments/settlement-account.js';
+import {
+  isMarzpayDisbursementComplete,
+  postCompletedDisbursementLedger,
+  postDisbursementVarianceAdjustment,
+} from '@/lib/payments/marzpay-disbursement-ledger.js';
 
 const OPEN_STATUSES = ['created', 'processing', 'review'];
 
@@ -53,6 +61,16 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
         AND column_name = ANY($1::text[])`,
     [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor']]
   );
+  const ledgerSchema = await pool.query(
+    `SELECT COUNT(*)::int AS column_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'payment_intents'
+        AND column_name = ANY($1::text[])`,
+    [['ledger_status', 'reconciliation_status', 'reconciliation_error',
+      'reconciliation_checked_at', 'reconciliation_adjustment_transaction_id',
+      'ledger_failure_reason', 'provider_fee_confirmed']]
+  );
   const directionConstraint = await pool.query(
     `SELECT EXISTS (
        SELECT 1
@@ -62,8 +80,9 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
           AND pg_get_constraintdef(oid) LIKE '%disbursement%'
      ) AS supports_disbursements`
   );
-  if (schema.rows[0]?.column_count !== 5 || !directionConstraint.rows[0]?.supports_disbursements) {
-    return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, and 963, then retry.' };
+  if (schema.rows[0]?.column_count !== 5 || ledgerSchema.rows[0]?.column_count !== 7 ||
+      !directionConstraint.rows[0]?.supports_disbursements) {
+    return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, 963, and 964, then retry.' };
   }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = await pool.query(
@@ -178,147 +197,271 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
     "UPDATE payment_intents SET provider_uuid = $1, provider_status = $2, status = 'processing', updated_at = NOW() WHERE id = $3 AND status = 'created'",
     [providerUuid, safeError(started.transaction.status), intent.id]
   );
-  const synced = await syncMobileMoneyDisbursement(intent.id);
-  return { ok: true, id: intent.id, status: synced.status, amountUgx };
+  try {
+    const synced = await syncMobileMoneyDisbursement(intent.id);
+    return {
+      ok: true,
+      id: intent.id,
+      status: synced.status,
+      ledgerStatus: synced.ledgerStatus,
+      reconciliationStatus: synced.reconciliationStatus,
+      failureReason: synced.error,
+      amountUgx,
+    };
+  } catch (error) {
+    console.error('[MarzPay disbursement] Provider accepted payout; ledger posting is retryable:', error.message);
+    return {
+      ok: true,
+      id: intent.id,
+      status: 'processing',
+      ledgerStatus: 'failed',
+      reconciliationStatus: 'pending',
+      failureReason: 'MarzPay accepted the payout. Ledger posting failed; recheck this transaction and do not start another withdrawal.',
+      amountUgx,
+    };
+  }
 }
 
 export async function syncMobileMoneyDisbursement(intentId, providerUuidHint = null) {
   const pool = getPool();
   if (providerUuidHint && /^[0-9a-fA-F-]{20,64}$/.test(providerUuidHint)) {
     await pool.query(
-      "UPDATE payment_intents SET provider_uuid = COALESCE(provider_uuid, $1), status = CASE WHEN status = 'review' AND provider_uuid IS NULL THEN 'processing' ELSE status END, updated_at = NOW() WHERE id = $2 AND direction = 'disbursement' AND status = ANY($3::text[])",
-      [providerUuidHint, intentId, OPEN_STATUSES]
+      `UPDATE payment_intents
+          SET provider_uuid = COALESCE(provider_uuid, $1),
+              status = CASE WHEN ledger_status = 'posted' THEN 'settled'
+                            WHEN status IN ('review', 'failed') THEN 'processing'
+                            ELSE status END,
+              updated_at = NOW()
+        WHERE id = $2 AND direction = 'disbursement'`,
+      [providerUuidHint, intentId]
     );
   }
   const initial = await pool.query(
     `SELECT id, status, provider_uuid, amount_minor, created_by, created_at, failure_reason,
-            settlement_account_id, member_account_id, provider_reference
+            settlement_account_id, member_account_id, provider_reference, ledger_status,
+            reconciliation_status, transaction_id
        FROM payment_intents WHERE id = $1 AND direction = 'disbursement' LIMIT 1`,
     [intentId]
   );
   const row = initial.rows[0];
   if (!row) return { status: 'failed', settled: false, error: 'Disbursement not found' };
-  if (row.status === 'settled' || row.status === 'failed' || row.status === 'expired') {
-    return { status: row.status, settled: row.status === 'settled', error: null };
+  if (row.ledger_status === 'posted' && row.reconciliation_status === 'matched') {
+    return {
+      status: 'settled',
+      ledgerStatus: 'posted',
+      reconciliationStatus: 'matched',
+      settled: true,
+      error: null,
+    };
   }
-  if (!row.provider_uuid) return { status: row.status, settled: false, error: row.failure_reason || null };
+  if (!row.provider_uuid) {
+    return {
+      status: row.ledger_status === 'posted' ? 'settled' : row.status,
+      ledgerStatus: row.ledger_status,
+      reconciliationStatus: row.reconciliation_status,
+      settled: row.ledger_status === 'posted',
+      error: row.failure_reason || null,
+    };
+  }
 
   const lookup = await getMarzpayDisbursement(row.provider_uuid);
-  if (!lookup.ok || !lookup.transaction) return { status: row.status, settled: false, error: safeError(lookup.error) };
-  const verdict = judgeMarzpayCollection(lookup.transaction, Number(row.amount_minor));
-  if (verdict.state === 'processing') {
-    if (Date.now() - new Date(row.created_at).getTime() > 30 * 60 * 1000) {
-      await pool.query("UPDATE payment_intents SET status = 'expired', provider_status = $1, failure_reason = 'Disbursement was not approved before timeout', updated_at = NOW() WHERE id = $2 AND direction = 'disbursement' AND status = ANY($3::text[])", [safeError(lookup.transaction.status), intentId, OPEN_STATUSES]);
-      return { status: 'expired', settled: false, error: 'Disbursement was not approved before timeout' };
-    }
-    await pool.query(
-      `UPDATE payment_intents
-          SET provider_status = $1, provider_amount_minor = $2, provider_currency = $3,
-              provider_mode = $4, provider_fee_minor = 0, updated_at = NOW()
-        WHERE id = $5 AND direction = 'disbursement' AND status = ANY($6::text[])`,
-      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-        verdict.providerMode, intentId, OPEN_STATUSES]
-    );
-    return { status: 'processing', settled: false, error: null };
+  if (!lookup.ok || !lookup.transaction) {
+    return {
+      status: row.ledger_status === 'posted' ? 'settled' : row.status,
+      ledgerStatus: row.ledger_status,
+      reconciliationStatus: row.reconciliation_status,
+      settled: row.ledger_status === 'posted',
+      error: safeError(lookup.error),
+    };
   }
-  if (verdict.state === 'failed') {
-    await pool.query(
-      `UPDATE payment_intents
-          SET status = 'failed', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
-              failure_reason = $5, updated_at = NOW()
-        WHERE id = $6 AND direction = 'disbursement' AND status = ANY($7::text[])`,
-      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-        verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
-    );
-    return { status: 'failed', settled: false, error: verdict.reason };
-  }
-  if (verdict.state === 'review') {
-    await pool.query(
-      `UPDATE payment_intents
-          SET status = 'review', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
-              failure_reason = $5, updated_at = NOW()
-        WHERE id = $6 AND direction = 'disbursement' AND status = ANY($7::text[])`,
-      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-        verdict.providerMode, verdict.reason, intentId, OPEN_STATUSES]
-    );
-    return { status: 'review', settled: false, error: verdict.reason };
-  }
+  const providerTransaction = lookup.transaction;
+  const providerStatus = safeError(providerTransaction.status);
+  const isComplete = isMarzpayDisbursementComplete(providerTransaction.status);
+  const isFailed = ['failed', 'cancelled', 'canceled', 'rejected', 'expired']
+    .includes(String(providerTransaction.status || '').trim().toLowerCase());
+  const providerAmount = Number.isSafeInteger(providerTransaction.amountMinor)
+    ? providerTransaction.amountMinor
+    : null;
+  const providerFee = Number.isSafeInteger(providerTransaction.feeMinor) && providerTransaction.feeMinor >= 0
+    ? providerTransaction.feeMinor
+    : null;
+  const providerCurrency = typeof providerTransaction.currency === 'string'
+    ? providerTransaction.currency.trim().toUpperCase().slice(0, 16)
+    : null;
+  const providerMode = typeof providerTransaction.mode === 'string'
+    ? providerTransaction.mode.trim().toLowerCase().slice(0, 32)
+    : null;
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const locked = await client.query("SELECT * FROM payment_intents WHERE id = $1 AND direction = 'disbursement' FOR UPDATE", [intentId]);
-    const current = locked.rows[0];
-    if (!current || current.status === 'settled') {
-      await client.query('ROLLBACK');
-      return { status: current?.status || 'failed', settled: current?.status === 'settled', error: null };
-    }
-    if (!OPEN_STATUSES.includes(current.status)) {
-      await client.query('ROLLBACK');
-      return { status: current.status, settled: false, error: null };
-    }
+  await pool.query(
+    `UPDATE payment_intents
+        SET provider_status = $1, provider_amount_minor = $2,
+            provider_currency = $3, provider_mode = $4, provider_fee_minor = COALESCE($5, 0),
+            provider_fee_confirmed = $6,
+            status = CASE WHEN ledger_status = 'posted' THEN 'settled'
+                          WHEN $7 THEN 'processing'
+                          WHEN $8 THEN 'failed'
+                          ELSE 'processing' END,
+            reconciliation_status = CASE WHEN ledger_status = 'posted'
+                                           AND reconciliation_status = 'matched'
+                                         THEN 'matched' ELSE 'pending' END,
+            reconciliation_error = CASE WHEN ledger_status = 'posted'
+                                          AND reconciliation_status = 'matched'
+                                        THEN reconciliation_error ELSE NULL END,
+            failure_reason = CASE WHEN $8 AND ledger_status <> 'posted'
+                                  THEN $9 ELSE failure_reason END,
+            updated_at = NOW()
+      WHERE id = $10 AND direction = 'disbursement'`,
+    [
+      providerStatus, providerAmount, providerCurrency, providerMode, providerFee,
+      providerFee !== null, isComplete, isFailed,
+      providerTransaction.message || `MarzPay reports ${providerStatus}`,
+      intentId,
+    ]
+  );
 
-    const balances = await client.query(
-      `SELECT COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE -amount END), 0) AS balance
-         FROM ledger_entries WHERE member_account_id = $1`,
-      [current.member_account_id]
-    );
-    const available = Number(balances.rows[0]?.balance || 0);
-    if (available < Number(current.amount_minor)) {
-      await client.query(
+  if (isComplete) {
+    const posting = await postCompletedDisbursementLedger(intentId, providerTransaction, pool);
+    const requestedAmount = Number(row.amount_minor);
+    const review = async (reason) => {
+      await pool.query(
         `UPDATE payment_intents
-            SET status = 'review', provider_status = $1, provider_amount_minor = $2,
-                provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
-                failure_reason = 'Provider paid the recipient but the member balance is no longer sufficient; reconcile manually',
-                updated_at = NOW()
-          WHERE id = $5`,
-        [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-          verdict.providerMode, intentId]
+            SET status = 'settled', ledger_status = 'posted',
+                reconciliation_status = 'review', reconciliation_error = $1,
+                reconciliation_checked_at = NOW(), updated_at = NOW()
+          WHERE id = $2 AND direction = 'disbursement'`,
+        [reason, intentId]
       );
-      await client.query('COMMIT');
-      return { status: 'review', settled: false, error: 'Provider paid the recipient; manual reconciliation is required' };
+      return {
+        status: 'settled',
+        ledgerStatus: 'posted',
+        reconciliationStatus: 'review',
+        ledgerAmountMinor: requestedAmount,
+        settled: true,
+        error: reason,
+        duplicate: posting.duplicate,
+      };
+    };
+
+    if (providerCurrency !== 'UGX') {
+      return review('Provider payout currency is missing or is not UGX; requested UGX withdrawal was posted and reconciliation is required.');
+    }
+    if (providerAmount === null || providerAmount <= 0) {
+      return review('Provider payout amount is missing or invalid; requested UGX withdrawal was posted and reconciliation is required.');
+    }
+    if (providerFee === null || providerFee < 0) {
+      return review('Provider payout fee is missing or invalid; requested UGX withdrawal was posted and reconciliation is required.');
     }
 
-    const transaction = await client.query(
-      `INSERT INTO transactions (description, transaction_type, reference, metadata, created_by)
-       VALUES ($1, 'withdrawal', $2, $3::jsonb, $4) RETURNING id`,
-      ['MarzPay mobile money withdrawal', current.provider_reference, JSON.stringify({ provider: 'marzpay', mode: 'automatic', direction: 'disbursement', provider_uuid: current.provider_uuid, payment_intent_id: current.id }), current.created_by]
-    );
-    const transactionId = transaction.rows[0].id;
-    const amount = Number(current.amount_minor);
-    await client.query(
-      `INSERT INTO ledger_entries (transaction_id, member_account_id, entry_type, amount, currency, description)
-       VALUES ($1, $2, 'DEBIT', $3, 'UGX', $4)`,
-      [transactionId, current.member_account_id, amount, 'Member mobile money withdrawal']
-    );
-    await client.query(
-      `INSERT INTO ledger_entries (transaction_id, account_id, entry_type, amount, currency, description)
-       VALUES ($1, $2, 'CREDIT', $3, 'UGX', $4)`,
-      [transactionId, current.settlement_account_id, amount, 'MarzPay disbursement settlement']
-    );
-    await client.query(
-      `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
-       VALUES ($1, $2, 'UGX', 'withdrawal', $3, $4, CURRENT_DATE, $5)`,
-      [current.settlement_account_id, -amount, transactionId, 'MarzPay disbursement settlement', current.created_by]
-    );
-    await client.query(
-      `UPDATE payment_intents
-          SET status = 'settled', provider_status = $1, provider_amount_minor = $2,
-              provider_currency = $3, provider_mode = $4, provider_fee_minor = 0,
-              ledger_amount_minor = $5, transaction_id = $6, settled_at = NOW(),
-              failure_reason = NULL, updated_at = NOW()
-        WHERE id = $7`,
-      [safeError(lookup.transaction.status), verdict.providerAmountMinor, verdict.providerCurrency,
-        verdict.providerMode, amount, transactionId, intentId]
-    );
-    await client.query('COMMIT');
-    return { status: 'settled', settled: true, error: null };
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
+    const providerTotal = providerAmount + (providerFee || 0);
+    if (!Number.isSafeInteger(providerTotal)) {
+      return review('Provider payout amount and fee exceed the supported UGX range; reconciliation is required.');
+    }
+    const variance = providerTotal - requestedAmount;
+    if (providerAmount !== requestedAmount && variance === 0) {
+      return review('Provider payout amount differs from the requested member withdrawal; confirm payout and fee treatment before clearing reconciliation.');
+    }
+    if (variance === 0) {
+      await pool.query(
+        `UPDATE payment_intents
+            SET status = 'settled', ledger_status = 'posted',
+                reconciliation_status = 'matched', reconciliation_error = NULL,
+                reconciliation_checked_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND direction = 'disbursement'`,
+        [intentId]
+      );
+      return {
+        status: 'settled',
+        ledgerStatus: 'posted',
+        reconciliationStatus: 'matched',
+        ledgerAmountMinor: requestedAmount,
+        settled: true,
+        error: null,
+        duplicate: posting.duplicate,
+      };
+    }
+
+    const reconciliationAccount = await getMarzpayReconciliationAccount();
+    if (!reconciliationAccount) {
+      return review('Provider amount or fee differs from the requested withdrawal; configure an active UGX reconciliation account before posting the adjustment.');
+    }
+    try {
+      await postDisbursementVarianceAdjustment({
+        intentId,
+        varianceMinor: variance,
+        reconciliationAccountId: reconciliationAccount.id,
+        pool,
+      });
+    } catch (error) {
+      console.error('[MarzPay disbursement] Variance adjustment failed:', error.message);
+      return review('Withdrawal ledger is posted, but the verified provider variance adjustment failed and must be retried.');
+    }
+    return {
+      status: 'settled',
+      ledgerStatus: 'posted',
+      reconciliationStatus: 'adjusted',
+      ledgerAmountMinor: requestedAmount,
+      settled: true,
+      error: null,
+      duplicate: posting.duplicate,
+    };
   }
+
+  if (row.ledger_status === 'posted') {
+    await pool.query(
+      `UPDATE payment_intents
+          SET status = 'settled', reconciliation_status = 'review',
+              reconciliation_error = $1, reconciliation_checked_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $2 AND direction = 'disbursement'`,
+      [isFailed
+        ? 'Provider no longer reports completion for an already-posted withdrawal; do not reverse automatically.'
+        : 'Provider lookup did not confirm completion; the already-posted ledger entry is unchanged.',
+      intentId]
+    );
+    return {
+      status: 'settled',
+      ledgerStatus: 'posted',
+      reconciliationStatus: 'review',
+      settled: true,
+      error: isFailed ? 'Provider status conflicts with the posted ledger; manual reconciliation is required.' : null,
+    };
+  }
+
+  if (isFailed) {
+    await pool.query(
+      `UPDATE payment_intents
+          SET status = 'failed', reconciliation_status = 'review',
+              reconciliation_error = $1, reconciliation_checked_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $2 AND direction = 'disbursement' AND ledger_status <> 'posted'`,
+      [providerTransaction.message || `MarzPay reports ${providerStatus}`, intentId]
+    );
+    return { status: 'failed', ledgerStatus: row.ledger_status, reconciliationStatus: 'review', settled: false, error: providerTransaction.message || `MarzPay reports ${providerStatus}` };
+  }
+
+  if (Date.now() - new Date(row.created_at).getTime() > 30 * 60 * 1000) {
+    await pool.query(
+      `UPDATE payment_intents
+          SET status = 'expired', reconciliation_status = 'review',
+              reconciliation_error = 'Disbursement was not approved before timeout',
+              reconciliation_checked_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND direction = 'disbursement' AND ledger_status <> 'posted'`,
+      [intentId]
+    );
+    return { status: 'expired', ledgerStatus: row.ledger_status, reconciliationStatus: 'review', settled: false, error: 'Disbursement was not approved before timeout' };
+  }
+  await pool.query(
+    `UPDATE payment_intents
+        SET status = 'processing', reconciliation_status = 'pending',
+            reconciliation_error = NULL, updated_at = NOW()
+      WHERE id = $1 AND direction = 'disbursement' AND ledger_status <> 'posted'`,
+    [intentId]
+  );
+  return {
+    status: 'processing',
+    ledgerStatus: row.ledger_status,
+    reconciliationStatus: 'pending',
+    settled: false,
+    error: null,
+  };
 }

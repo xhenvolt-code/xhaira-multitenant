@@ -30,6 +30,8 @@ export async function GET(request) {
     const result = await getPool().query(
         `SELECT id, direction, amount_minor, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
+              ledger_status, reconciliation_status, reconciliation_error,
+              reconciliation_adjustment_transaction_id, ledger_failure_reason,
               failure_reason, phone_masked, transaction_id, created_at, settled_at
          FROM payment_intents
         WHERE direction = 'collection'
@@ -64,7 +66,8 @@ export async function POST(request) {
     const intent = result.id
       ? (await getPool().query(
         `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
-                provider_currency, failure_reason
+                provider_currency, ledger_status, reconciliation_status, reconciliation_error,
+                reconciliation_adjustment_transaction_id, ledger_failure_reason, failure_reason
            FROM payment_intents WHERE id = $1`,
         [result.id]
       )).rows[0]
@@ -78,6 +81,11 @@ export async function POST(request) {
       provider_fee_minor: intent?.provider_fee_minor,
       ledger_amount_minor: intent?.ledger_amount_minor,
       provider_currency: intent?.provider_currency,
+      ledger_status: intent?.ledger_status,
+      reconciliation_status: intent?.reconciliation_status,
+      reconciliation_error: intent?.reconciliation_error,
+      reconciliation_adjustment_transaction_id: intent?.reconciliation_adjustment_transaction_id,
+      ledger_failure_reason: intent?.ledger_failure_reason,
       failure_reason: intent?.failure_reason || result.error,
       amountUgx: result.amountUgx,
       duplicate: result.duplicate || false,

@@ -18,6 +18,7 @@ const CATEGORY_LABELS = {
 
 const CATEGORY_ORDER = ['general', 'members', 'accounts', 'loans', 'transfers', 'ui', 'notifications'];
 const MARZPAY_SETTLEMENT_ACCOUNT_KEY = 'payments.marzpay.settlement_account_id';
+const MARZPAY_RECONCILIATION_ACCOUNT_KEY = 'payments.marzpay.reconciliation_account_id';
 const MARZPAY_COLLECTION_FEE_KEY = 'payments.marzpay.collection_fee_rule';
 const POLICY_OPTIONS = {
   'groups.requirement': [['required', 'Members must belong to a group'], ['optional', 'Group membership is optional'], ['disabled', 'Groups are disabled']],
@@ -51,8 +52,11 @@ export default function SACCOConfigurationsPage() {
   const [saving, setSaving] = useState({});
   const [pendingChanges, setPendingChanges] = useState({});
   const [settlementAccounts, setSettlementAccounts] = useState([]);
+  const [reconciliationAccounts, setReconciliationAccounts] = useState([]);
   const [settlementAccountId, setSettlementAccountId] = useState('');
   const [settlementAccountSaving, setSettlementAccountSaving] = useState(false);
+  const [reconciliationAccountId, setReconciliationAccountId] = useState('');
+  const [reconciliationAccountSaving, setReconciliationAccountSaving] = useState(false);
   const [canManage, setCanManage] = useState(false);
   const [collectionFeePercent, setCollectionFeePercent] = useState('3.00');
   const [collectionFeeSaving, setCollectionFeeSaving] = useState(false);
@@ -66,10 +70,13 @@ export default function SACCOConfigurationsPage() {
       if (!json.success) throw new Error(json.error || 'Failed to load configurations.');
       const configurations = json.data || [];
       const settlementConfig = configurations.find(config => config.config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY);
+      const reconciliationConfig = configurations.find(config => config.config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY);
       const feeConfig = configurations.find(config => config.config_key === MARZPAY_COLLECTION_FEE_KEY);
       setConfigs(configurations);
       setSettlementAccounts(json.settlementAccounts || []);
+      setReconciliationAccounts(json.reconciliationAccounts || []);
       setSettlementAccountId(typeof settlementConfig?.config_value === 'string' ? settlementConfig.config_value : '');
+      setReconciliationAccountId(typeof reconciliationConfig?.config_value === 'string' ? reconciliationConfig.config_value : '');
       if (feeConfig?.config_value?.version === 1 && Number.isInteger(feeConfig.config_value.basis_points)) {
         setCollectionFeePercent((feeConfig.config_value.basis_points / 100).toFixed(2));
       }
@@ -77,6 +84,7 @@ export default function SACCOConfigurationsPage() {
     } catch (error) {
       setConfigs([]);
       setSettlementAccounts([]);
+      setReconciliationAccounts([]);
       setLoadError(error.message || 'Failed to load configurations.');
       toast.error(error.message || 'Failed to load configurations');
     } finally {
@@ -175,6 +183,32 @@ export default function SACCOConfigurationsPage() {
     }
   };
 
+  const saveReconciliationAccount = async () => {
+    setReconciliationAccountSaving(true);
+    try {
+      const res = await fetchWithAuth('/api/sacco-configurations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_key: MARZPAY_RECONCILIATION_ACCOUNT_KEY,
+          config_value: reconciliationAccountId,
+          label: 'MarzPay reconciliation account',
+          description: 'UGX organization system account used as the contra for verified MarzPay payout variances.',
+          config_type: 'text',
+          category: 'accounts',
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Could not save reconciliation account.');
+      toast.success('Reconciliation account saved');
+      await fetchConfigs();
+    } catch (error) {
+      toast.error(error.message || 'Could not save reconciliation account');
+    } finally {
+      setReconciliationAccountSaving(false);
+    }
+  };
+
   const saveCollectionFee = async () => {
     const percent = Number(collectionFeePercent);
     const basisPoints = Math.round(percent * 100);
@@ -207,7 +241,11 @@ export default function SACCOConfigurationsPage() {
     }
   };
 
-  const grouped = configs.filter(config => ![MARZPAY_SETTLEMENT_ACCOUNT_KEY, MARZPAY_COLLECTION_FEE_KEY].includes(config.config_key)).reduce((acc, c) => {
+  const grouped = configs.filter(config => ![
+    MARZPAY_SETTLEMENT_ACCOUNT_KEY,
+    MARZPAY_RECONCILIATION_ACCOUNT_KEY,
+    MARZPAY_COLLECTION_FEE_KEY,
+  ].includes(config.config_key)).reduce((acc, c) => {
     const cat = c.category || 'general';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(c);
@@ -296,6 +334,47 @@ export default function SACCOConfigurationsPage() {
               <Plus className="h-4 w-4" /> Create account
             </Link>
           </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-foreground">MarzPay reconciliation contra account</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            UGX payout amount or fee differences are posted here as immutable, balanced adjustments after the member withdrawal is posted. Non-UGX reports are held for review; no currency conversion is assumed.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <select
+            value={reconciliationAccountId}
+            onChange={event => setReconciliationAccountId(event.target.value)}
+            disabled={!canManage || reconciliationAccountSaving}
+            className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground disabled:opacity-50"
+          >
+            <option value="">Select an active UGX system account</option>
+            {reconciliationAccountId && !reconciliationAccounts.some(account => account.id === reconciliationAccountId) && (
+              <option value={reconciliationAccountId}>Previously selected account is no longer available</option>
+            )}
+            {reconciliationAccounts.map(account => (
+              <option key={account.id} value={account.id}>{account.name}</option>
+            ))}
+          </select>
+          {canManage && (
+            <button
+              type="button"
+              onClick={saveReconciliationAccount}
+              disabled={reconciliationAccountSaving}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {reconciliationAccountSaving ? 'Saving…' : 'Save reconciliation account'}
+            </button>
+          )}
+        </div>
+        {!canManage && <p className="text-xs text-muted-foreground">Only the organization superadmin can change this setting.</p>}
+        {!reconciliationAccounts.length && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            No active UGX system account is available. The finance administrator must configure an organization reconciliation account before payout variances can be adjusted.
+          </p>
         )}
       </section>
 

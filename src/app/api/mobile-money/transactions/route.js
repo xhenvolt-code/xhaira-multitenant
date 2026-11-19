@@ -68,8 +68,9 @@ export async function POST(request) {
       : await createMobileMoneyDisbursement(input);
     const intentDetails = result.id
       ? (await getPool().query(
-        `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
-                provider_currency, failure_reason
+        `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, provider_fee_confirmed, ledger_amount_minor,
+                provider_currency, ledger_status, reconciliation_status, reconciliation_error,
+                reconciliation_adjustment_transaction_id, ledger_failure_reason, failure_reason
            FROM payment_intents WHERE id = $1`,
         [result.id]
       )).rows[0]
@@ -85,8 +86,14 @@ export async function POST(request) {
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
       provider_fee_minor: intentDetails?.provider_fee_minor,
+      provider_fee_confirmed: intentDetails?.provider_fee_confirmed,
       ledger_amount_minor: intentDetails?.ledger_amount_minor,
       provider_currency: intentDetails?.provider_currency,
+      ledger_status: intentDetails?.ledger_status,
+      reconciliation_status: intentDetails?.reconciliation_status,
+      reconciliation_error: intentDetails?.reconciliation_error,
+      reconciliation_adjustment_transaction_id: intentDetails?.reconciliation_adjustment_transaction_id,
+      ledger_failure_reason: intentDetails?.ledger_failure_reason,
       failure_reason: result.error || intentDetails?.failure_reason,
       amountUgx: input.amountUgx, pendingReview: true,
     }, { status: 202 });
@@ -103,8 +110,14 @@ export async function POST(request) {
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
       provider_fee_minor: intentDetails?.provider_fee_minor,
+      provider_fee_confirmed: intentDetails?.provider_fee_confirmed,
       ledger_amount_minor: intentDetails?.ledger_amount_minor,
       provider_currency: intentDetails?.provider_currency,
+      ledger_status: intentDetails?.ledger_status,
+      reconciliation_status: intentDetails?.reconciliation_status,
+      reconciliation_error: intentDetails?.reconciliation_error,
+      reconciliation_adjustment_transaction_id: intentDetails?.reconciliation_adjustment_transaction_id,
+      ledger_failure_reason: intentDetails?.ledger_failure_reason,
       failure_reason: result.failureReason || intentDetails?.failure_reason,
       amountUgx: result.amountUgx, duplicate: result.duplicate || false,
     },

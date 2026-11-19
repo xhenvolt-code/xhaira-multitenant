@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { MARZPAY_COLLECTION_FEE_KEY, MARZPAY_SETTLEMENT_ACCOUNT_KEY } from '@/lib/payments/settlement-account.js';
+import {
+  MARZPAY_COLLECTION_FEE_KEY,
+  MARZPAY_RECONCILIATION_ACCOUNT_KEY,
+  MARZPAY_SETTLEMENT_ACCOUNT_KEY,
+} from '@/lib/payments/settlement-account.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-configurations — List all SACCO configuration toggles
@@ -21,7 +25,7 @@ export async function GET(request) {
     }
 
     const result = await runWithOrganizationContext(perm.auth.organizationId, async () => {
-      const [configurations, settlementAccounts] = await Promise.all([
+      const [configurations, settlementAccounts, reconciliationAccounts] = await Promise.all([
         query(sql, params),
         query(
           `SELECT id, name, type, currency
@@ -32,13 +36,23 @@ export async function GET(request) {
             ORDER BY name`,
           [perm.auth.organizationId]
         ),
+        query(
+          `SELECT id, name, type, currency
+             FROM accounts
+            WHERE organization_id = $1 AND type = 'system'
+              AND currency = 'UGX' AND is_active = true
+              AND status = 'active'
+            ORDER BY name`,
+          [perm.auth.organizationId]
+        ),
       ]);
-      return { configurations, settlementAccounts };
+      return { configurations, settlementAccounts, reconciliationAccounts };
     });
     return NextResponse.json({
       success: true,
       data: result.configurations.rows,
       settlementAccounts: result.settlementAccounts.rows,
+      reconciliationAccounts: result.reconciliationAccounts.rows,
       canManage: perm.auth.role === 'superadmin',
     });
   } catch (error) {
@@ -68,6 +82,13 @@ export async function POST(request) {
       if (typeof config_value !== 'string' || (config_value !== '' &&
           !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(config_value))) {
         return NextResponse.json({ success: false, error: 'Select a valid organization settlement account' }, { status: 400 });
+      }
+      normalizedConfigValue = config_value;
+    }
+    if (config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY) {
+      if (typeof config_value !== 'string' || (config_value !== '' &&
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(config_value))) {
+        return NextResponse.json({ success: false, error: 'Select a valid organization reconciliation account' }, { status: 400 });
       }
       normalizedConfigValue = config_value;
     }
@@ -153,6 +174,18 @@ export async function POST(request) {
           throw Object.assign(new Error('Settlement account must be an active UGX mobile-money account belonging to your organization'), { status: 400 });
         }
       }
+      if (config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY && normalizedConfigValue) {
+        const account = await client.query(
+          `SELECT id FROM accounts
+            WHERE id = $1 AND organization_id = $2
+              AND type = 'system' AND currency = 'UGX'
+              AND is_active = true AND status = 'active'`,
+          [normalizedConfigValue, auth.organizationId]
+        );
+        if (!account.rows[0]) {
+          throw Object.assign(new Error('Reconciliation account must be an active UGX system account belonging to your organization'), { status: 400 });
+        }
+      }
       const actor = await client.query('SELECT organization_id FROM users WHERE id = $1', [auth.userId]);
       if (actor.rows[0]?.organization_id !== auth.organizationId) {
         throw Object.assign(new Error('Your account is not linked to the active organization. Sign out and sign in again.'), { status: 403 });
@@ -174,16 +207,22 @@ export async function POST(request) {
           JSON.stringify(normalizedConfigValue !== undefined ? normalizedConfigValue : true),
           label || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY
             ? 'MarzPay settlement account'
+            : config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY
+              ? 'MarzPay reconciliation account'
             : config_key === MARZPAY_COLLECTION_FEE_KEY ? 'MarzPay collection fee' : null),
           description || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY
             ? 'Organization account used for MarzPay collections and disbursements'
+            : config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY
+              ? 'UGX organization system account used as the contra for verified MarzPay payout variances.'
             : config_key === MARZPAY_COLLECTION_FEE_KEY
               ? 'Configured provider surcharge paid by the payer; recorded separately from the net amount credited to the organization and member.'
               : null),
-          config_type || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY
+          config_type || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ||
+            config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY
             ? 'json'
             : config_key === 'transfers.approval_threshold' ? 'json' : 'boolean'),
-          category || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY ? 'accounts' : 'general'),
+          category || (config_key === MARZPAY_SETTLEMENT_ACCOUNT_KEY ||
+            config_key === MARZPAY_RECONCILIATION_ACCOUNT_KEY || config_key === MARZPAY_COLLECTION_FEE_KEY ? 'accounts' : 'general'),
           auth.userId,
         ]
       );
