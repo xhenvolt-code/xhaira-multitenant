@@ -53,8 +53,17 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
         AND column_name = ANY($1::text[])`,
     [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor']]
   );
-  if (schema.rows[0]?.column_count !== 5) {
-    return { ok: false, status: 503, error: 'Payment reconciliation schema is not ready. No MarzPay request was sent; apply migrations 961 and 962, then retry.' };
+  const directionConstraint = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM pg_constraint
+        WHERE conrelid = to_regclass('public.payment_intents')
+          AND conname = 'payment_intents_direction_check'
+          AND pg_get_constraintdef(oid) LIKE '%disbursement%'
+     ) AS supports_disbursements`
+  );
+  if (schema.rows[0]?.column_count !== 5 || !directionConstraint.rows[0]?.supports_disbursements) {
+    return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, and 963, then retry.' };
   }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = await pool.query(
