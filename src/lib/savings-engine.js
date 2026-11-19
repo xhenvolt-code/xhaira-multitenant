@@ -6,11 +6,11 @@
  *
  * ─── Deposit flow ────────────────────────────────────────────────────────────
  *   CREDIT → member_account (balance +)
- *   DEBIT  → SACCO Cash Account (system account, balance -)
+ *   DEBIT  → SACCO Cash Account (asset balance +)
  *
  * ─── Withdrawal flow ─────────────────────────────────────────────────────────
  *   DEBIT  → member_account (balance -)
- *   CREDIT → SACCO Cash Account (system account, balance +)
+ *   CREDIT → SACCO Cash Account (asset balance -)
  *
  * Withdrawal is rejected if any configured rule is violated.
  * ─────────────────────────────────────────────────────────────────────────────

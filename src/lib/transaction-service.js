@@ -14,6 +14,7 @@
 
 import { getPool } from '@/lib/db.js';
 import { validateWithdrawal } from '@/lib/account-rules-engine.js';
+import { getAccountLedgerDelta } from './account-ledger.js';
 
 /**
  * Get the system cash account ID (SACCO liquidity pool)
@@ -127,7 +128,7 @@ export async function createTransaction({ description, transaction_type, referen
       // Also write to company ledger table if account_id is set
       // (needed for v_account_balances view compatibility)
       if (entry.account_id) {
-        const ledgerAmount = entry.type === 'CREDIT' ? entry.amount : -entry.amount;
+        const ledgerAmount = getAccountLedgerDelta(entry.type, entry.amount, transaction_type);
         await client.query(
           `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, $7)`,
