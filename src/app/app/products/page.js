@@ -15,6 +15,7 @@ function formatAmount(n, currency = 'UGX') {
 
 export default function ProductsPage() {
   const [products, setProducts] = useState([]);
+  const [loanProducts, setLoanProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -22,7 +23,7 @@ export default function ProductsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [form, setForm] = useState({
     name: '', description: '', version: '', status: 'active', product_type: 'SERVICE',
-    interest_rate: '', duration_months: '', min_amount: '', max_amount: '',
+    interest_rate: '', duration_months: '', repayment_cycle: '', min_amount: '', max_amount: '',
     requires_approval: false, upfront_amount: '', return_rate: '',
     billing_frequency: '', currency: 'UGX', price: '',
   });
@@ -34,8 +35,24 @@ export default function ProductsPage() {
     try {
       const res = await fetchWithAuth('/api/products');
       const json = await res.json();
-      if (json.success) setProducts(json.data);
-    } catch (err) { console.error(err); } finally { setLoading(false); }
+      if (!json.success) throw new Error(json.error || 'Failed to load products');
+      setProducts(json.data || []);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Failed to load products');
+    }
+
+    try {
+      const res = await fetchWithAuth('/api/sacco-products?type=LOAN');
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Failed to load loan products');
+      setLoanProducts(json.data || []);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Failed to load loan products');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const filteredProducts = useMemo(() => {
@@ -56,26 +73,50 @@ export default function ProductsPage() {
       ['interest_rate', 'duration_months', 'min_amount', 'max_amount', 'upfront_amount', 'return_rate', 'price'].forEach(f => {
         body[f] = body[f] !== '' && body[f] !== null ? parseFloat(body[f]) : null;
       });
-      const res = await fetchWithAuth('/api/products', {
+      const isLoanProduct = body.product_type === 'LOAN';
+      const endpoint = isLoanProduct ? '/api/sacco-products' : '/api/products';
+      const payload = isLoanProduct
+        ? {
+          name: body.name,
+          description: body.description,
+          product_type: body.product_type,
+          interest_rate: body.interest_rate,
+          duration: body.duration_months,
+          repayment_cycle: body.repayment_cycle,
+          min_amount: body.min_amount,
+          max_amount: body.max_amount,
+          currency: body.currency,
+          requires_approval: body.requires_approval,
+          is_active: body.status === 'active',
+        }
+        : body;
+      const res = await fetchWithAuth(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.success) {
-        toast.success('Product created');
-        setProducts(prev => [json.data, ...prev]);
+        toast.success(isLoanProduct ? 'Loan product created for loan applications' : 'Product created');
+        if (isLoanProduct) {
+          setLoanProducts(prev => [json.data, ...prev]);
+        } else {
+          setProducts(prev => [json.data, ...prev]);
+        }
         resetForm();
         setShowForm(false);
       } else {
         toast.error(json.error || 'Failed to create product');
       }
-    } catch (err) { console.error(err); } finally { setSaving(false); }
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Could not create product. Check the connection and try again.');
+    } finally { setSaving(false); }
   };
 
   const resetForm = () => setForm({
     name: '', description: '', version: '', status: 'active', product_type: 'SERVICE',
-    interest_rate: '', duration_months: '', min_amount: '', max_amount: '',
+    interest_rate: '', duration_months: '', repayment_cycle: '', min_amount: '', max_amount: '',
     requires_approval: false, upfront_amount: '', return_rate: '',
     billing_frequency: '', currency: 'UGX', price: '',
   });
@@ -85,7 +126,11 @@ export default function ProductsPage() {
 
   const totalRevenue = products.reduce((s, p) => s + parseFloat(p.total_revenue || 0), 0);
   const activeProducts = products.filter(p => p.status === 'active').length;
-  const typeCounts = PRODUCT_TYPE_KEYS.reduce((acc, t) => { acc[t] = products.filter(p => p.product_type === t).length; return acc; }, {});
+  const typeCounts = PRODUCT_TYPE_KEYS.reduce((acc, t) => {
+    acc[t] = products.filter(p => p.product_type === t).length;
+    return acc;
+  }, {});
+  typeCounts.LOAN += loanProducts.length;
 
   return (
     <div className="p-6 space-y-6">
@@ -102,6 +147,33 @@ export default function ProductsPage() {
           <Plus className="w-4 h-4" /> New Product
         </button>
       </div>
+
+      {loanProducts.length > 0 && (
+        <section className="bg-card rounded-xl border border-border p-5 space-y-3">
+          <div>
+            <h2 className="font-semibold text-foreground">Loan Products</h2>
+            <p className="text-sm text-muted-foreground">Products available when members apply for loans.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {loanProducts.map(product => (
+              <div key={product.id} className="rounded-lg border border-border p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="font-medium text-foreground">{product.name}</h3>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${product.is_active ? STATUS_STYLES.active : STATUS_STYLES.archived}`}>
+                    {product.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+                {product.description && <p className="text-sm text-muted-foreground mt-1">{product.description}</p>}
+                <div className="text-xs text-muted-foreground mt-3 space-y-1">
+                  <p>Interest: {product.interest_rate}% · Duration: {product.duration} months</p>
+                  <p>Repayment: {product.repayment_cycle || 'Not specified'}</p>
+                  <p>Range: {formatAmount(product.min_amount, product.currency)} – {formatAmount(product.max_amount, product.currency)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Type Filter Chips */}
       <div className="flex flex-wrap gap-2">
@@ -160,7 +232,11 @@ export default function ProductsPage() {
                 const Icon = TYPE_ICONS[t];
                 const config = PRODUCT_TYPES[t];
                 return (
-                  <button key={t} type="button" onClick={() => setForm(f => ({ ...f, product_type: t }))}
+                  <button key={t} type="button" onClick={() => setForm(f => ({
+                    ...f,
+                    product_type: t,
+                    requires_approval: t === 'LOAN' ? true : f.requires_approval,
+                  }))}
                     className={`px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 border ${
                       form.product_type === t ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' : 'border-border hover:border-blue-300'
                     }`}>
@@ -170,6 +246,11 @@ export default function ProductsPage() {
               })}
             </div>
             <p className="text-xs text-muted-foreground mt-1">{typeConfig.description}</p>
+            {form.product_type === 'LOAN' && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Loan products are saved to the SACCO loan catalog and become available in loan applications.
+              </p>
+            )}
           </div>
 
           {/* Basic Fields */}
@@ -249,7 +330,7 @@ export default function ProductsPage() {
       {loading ? (
         <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>
       ) : filteredProducts.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
+        filterType === 'LOAN' && loanProducts.length > 0 ? null : <div className="text-center py-16 text-muted-foreground">
           <Package className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="font-medium">{filterType ? `No ${PRODUCT_TYPES[filterType]?.label} products` : 'No products yet'}</p>
           <p className="text-sm mt-1">Create your first product to get started</p>

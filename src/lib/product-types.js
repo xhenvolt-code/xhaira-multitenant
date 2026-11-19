@@ -14,6 +14,7 @@ export const PRODUCT_TYPES = {
     fields: {
       interest_rate: { required: true, label: 'Interest Rate (%)', type: 'number', step: '0.01' },
       duration_months: { required: true, label: 'Duration (months)', type: 'number' },
+      repayment_cycle: { required: true, label: 'Repayment Cycle', type: 'select', options: ['DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY'] },
       min_amount: { required: true, label: 'Minimum Amount', type: 'number' },
       max_amount: { required: true, label: 'Maximum Amount', type: 'number' },
       requires_approval: { required: false, label: 'Requires Approval', type: 'boolean', defaultValue: true },

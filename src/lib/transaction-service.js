@@ -149,22 +149,38 @@ export async function createTransaction({
     // Insert all ledger entries
     const insertedEntries = [];
     for (const entry of entries) {
-      const entryResult = await client.query(
-        `INSERT INTO ledger_entries
-           (transaction_id, account_id, member_account_id, employee_account_id, entry_type, amount, currency, description)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *`,
-        [
-          transaction.id,
-          entry.account_id || null,
-          entry.member_account_id || null,
-          entry.employee_account_id || null,
-          entry.type,
-          entry.amount,
-          entry.currency || 'UGX',
-          entry.description || description,
-        ]
-      );
+      const entryResult = entry.employee_account_id
+        ? await client.query(
+          `INSERT INTO ledger_entries
+             (transaction_id, account_id, member_account_id, employee_account_id, entry_type, amount, currency, description)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING *`,
+          [
+            transaction.id,
+            entry.account_id || null,
+            entry.member_account_id || null,
+            entry.employee_account_id,
+            entry.type,
+            entry.amount,
+            entry.currency || 'UGX',
+            entry.description || description,
+          ]
+        )
+        : await client.query(
+          `INSERT INTO ledger_entries
+             (transaction_id, account_id, member_account_id, entry_type, amount, currency, description)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            transaction.id,
+            entry.account_id || null,
+            entry.member_account_id || null,
+            entry.type,
+            entry.amount,
+            entry.currency || 'UGX',
+            entry.description || description,
+          ]
+        );
       insertedEntries.push(entryResult.rows[0]);
 
       // Also write to company ledger table if account_id is set
