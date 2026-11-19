@@ -19,8 +19,10 @@ const STATUS_STYLES = {
 export default function MembersPage() {
   const { rememberMembers } = useMembersData();
   const [members, setMembers] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [activeView, setActiveView] = useState('members');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -34,6 +36,7 @@ export default function MembersPage() {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (statusFilter) params.set('status', statusFilter);
+      params.set('kind', 'individual');
       params.set('limit', '100');
       params.set('page', '1');
       const firstResponse = await fetchWithAuth(`/api/members?${params}`, { cache: 'no-store' });
@@ -76,13 +79,37 @@ export default function MembersPage() {
     }
   };
 
+  const fetchGroups = async () => {
+    const requestId = ++membersRequestId.current;
+    setLoading(true);
+    setLoadError('');
+    try {
+      const response = await fetchWithAuth('/api/groups', { cache: 'no-store' });
+      const result = await response.json();
+      if (!response._ok || !result.success) {
+        throw new Error(result.error || 'Could not load groups. Please try again.');
+      }
+      if (requestId !== membersRequestId.current) return;
+      setGroups(result.data || []);
+    } catch (err) {
+      if (requestId !== membersRequestId.current) return;
+      console.error('Failed to fetch groups:', err);
+      setLoadError(err.message || 'Could not load groups. Please check your connection and try again.');
+    } finally {
+      if (requestId === membersRequestId.current) setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchMembers();
+    if (activeView === 'members') fetchMembers();
+    else fetchGroups();
     return () => { membersRequestId.current += 1; };
-  }, [search, statusFilter]);
+  }, [activeView, search, statusFilter]);
 
   const activeCount = members.filter(m => m.status === 'active').length;
   const totalBalance = members.reduce((sum, m) => sum + parseFloat(m.total_balance || 0), 0);
+  const visibleGroups = groups.filter((group) => !search ||
+    group.full_name?.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -90,35 +117,67 @@ export default function MembersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Users className="w-6 h-6 text-blue-500" /> SACCO Members
+            <Users className="w-6 h-6 text-blue-500" />
+            {activeView === 'members' ? 'SACCO Members' : 'SACCO Groups'}
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage cooperative membership, accounts, and balances</p>
+          <p className="text-sm text-muted-foreground mt-1">Manage cooperative members and groups separately</p>
         </div>
         <button onClick={() => setShowForm(!showForm)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition">
-          <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : 'New Member'}
+          <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : activeView === 'members' ? 'New Member' : 'New Group'}
         </button>
+      </div>
+
+      <div className="flex gap-2 border-b border-border" role="tablist" aria-label="Membership type">
+        {[
+          { id: 'members', label: 'Members' },
+          { id: 'groups', label: 'Groups' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeView === tab.id}
+            onClick={() => { setActiveView(tab.id); setShowForm(false); }}
+            className={`border-b-2 px-4 py-2 text-sm font-medium ${
+              activeView === tab.id
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-card border border-border rounded-xl p-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase">Total Members</div>
-          <div className="text-2xl font-bold mt-1">{members.length}</div>
+          <div className="text-xs font-medium text-muted-foreground uppercase">{activeView === 'members' ? 'Total Members' : 'Total Groups'}</div>
+          <div className="text-2xl font-bold mt-1">{activeView === 'members' ? members.length : visibleGroups.length}</div>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase">Active Members</div>
-          <div className="text-2xl font-bold mt-1 text-emerald-600">{activeCount}</div>
+          <div className="text-xs font-medium text-muted-foreground uppercase">{activeView === 'members' ? 'Active Members' : 'Group Members'}</div>
+          <div className="text-2xl font-bold mt-1 text-emerald-600">
+            {activeView === 'members' ? activeCount : visibleGroups.reduce((sum, group) => sum + Number(group.member_count || 0), 0)}
+          </div>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase">Total Balances</div>
-          <div className="text-2xl font-bold mt-1 text-blue-600">{fmtCurrency(totalBalance)}</div>
+          <div className="text-xs font-medium text-muted-foreground uppercase">{activeView === 'members' ? 'Total Balances' : 'View group details'}</div>
+          <div className="text-2xl font-bold mt-1 text-blue-600">{activeView === 'members' ? fmtCurrency(totalBalance) : 'Open a group'}</div>
         </div>
       </div>
 
       {/* Registration Form */}
       {showForm && (
-        <MemberRegistrationForm onDone={() => { setShowForm(false); fetchMembers(); }} />
+        <MemberRegistrationForm
+          memberKind={activeView === 'groups' ? 'group' : 'individual'}
+          onDone={() => {
+            setShowForm(false);
+            if (activeView === 'members') fetchMembers();
+            else fetchGroups();
+          }}
+        />
       )}
 
       {/* Filters */}
@@ -126,26 +185,59 @@ export default function MembersPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search by name, email, phone, or membership number..."
+            placeholder={activeView === 'members' ? 'Search members by name, email, phone, or membership number...' : 'Search groups by name...'}
             className="w-full pl-9 pr-4 py-2 bg-background border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+        {activeView === 'members' && <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           className="px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring [&>option]:bg-background">
           <option value="">All Statuses</option>
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
           <option value="suspended">Suspended</option>
           <option value="exited">Exited</option>
-        </select>
+        </select>}
       </div>
 
       {/* Members Table */}
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading members...</div>
+        <div className="text-center py-12 text-muted-foreground">Loading {activeView}...</div>
       ) : loadError ? (
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-8 text-center text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
           <p>{loadError}</p>
-          <button onClick={fetchMembers} className="mt-3 text-sm underline">Retry</button>
+          <button onClick={activeView === 'members' ? fetchMembers : fetchGroups} className="mt-3 text-sm underline">Retry</button>
+        </div>
+      ) : activeView === 'groups' ? visibleGroups.length === 0 ? (
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <Users className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
+          <p className="text-muted-foreground">No groups found</p>
+          <p className="text-xs text-muted-foreground mt-1">Register your first group to get started</p>
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/30">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Group</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Members</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleGroups.map((group) => (
+                  <tr key={group.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition">
+                    <td className="px-4 py-3 font-medium text-foreground">{group.full_name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{group.member_count || 0}</td>
+                    <td className="px-4 py-3 text-right">
+                      <Link href={`/app/groups/${group.id}`} className="text-sm font-medium text-blue-600 hover:underline">
+                        Open group
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : members.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center">
