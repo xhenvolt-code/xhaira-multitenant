@@ -77,7 +77,7 @@ function createFakePool({ failLedgerEntryOnce = false } = {}) {
             return { rows: [] };
           }
           if (sql.includes('INSERT INTO ledger')) {
-            state.companyLedger.push({ params });
+            state.companyLedger.push({ sql, params });
             return { rows: [] };
           }
           if (sql.includes("SET status = 'settled', ledger_status = 'posted'")) {
@@ -134,6 +134,7 @@ test('duplicate webhook reconciliation does not post the withdrawal ledger twice
   assert.equal(pool.state.transactions.length, 1);
   assert.equal(pool.state.ledgerEntries.length, 2);
   assert.equal(pool.state.companyLedger.length, 1);
+  assert.match(pool.state.companyLedger[0].sql, /'adjustment'/);
 });
 
 test('a failed ledger write rolls back and retries to one completed posting', async () => {

@@ -71,7 +71,7 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
       );
       await client.query(
         `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
-         VALUES ($1, $2, 'UGX', 'transfer_out', $3, $4, CURRENT_DATE, $5)`,
+         VALUES ($1, $2, 'UGX', 'adjustment', $3, $4, CURRENT_DATE, $5)`,
         [intent.settlement_account_id, -amount, transactionId, 'MarzPay disbursement settlement', intent.created_by]
       );
       await client.query(
