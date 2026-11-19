@@ -21,6 +21,33 @@ test('normalizes whole UGX amounts from numeric and decimal-string provider fiel
   }
 });
 
+test('normalizes scalar disbursement amounts and currency reported beside the amount', () => {
+  const result = normalizeMarzpayTransaction({
+    data: {
+      transaction: { uuid: 'b6f9a2c4-7e11-4aa3-8db3-2b9b60381422', status: 'completed' },
+      disbursement: { amount: 1000, currency: 'UGX' },
+    },
+  }, 'disbursement');
+
+  assert.equal(result.amountMinor, 1000);
+  assert.equal(result.currency, 'UGX');
+  assert.equal(judgeMarzpayCollection(result, 1000).state, 'settled');
+});
+
+test('prefers the requested transaction direction when response has multiple amount sections', () => {
+  const result = normalizeMarzpayTransaction({
+    data: {
+      transaction: { status: 'completed' },
+      collection: { amount: { raw: 500, currency: 'KES' } },
+      disbursement: { amount: 1000, currency: 'UGX' },
+    },
+  }, 'disbursement');
+
+  assert.equal(result.amountMinor, 1000);
+  assert.equal(result.currency, 'UGX');
+  assert.equal(judgeMarzpayCollection(result, 1000).state, 'settled');
+});
+
 test('settles a completed collection for the actual lower provider amount when enabled', () => {
   const verdict = judgeMarzpayCollection(providerTransaction(970), 1000, { allowLowerAmount: true });
 

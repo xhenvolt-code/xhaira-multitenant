@@ -23,22 +23,28 @@ export function getMarzpayConfig() {
 
 export const isMarzpayConfigured = () => getMarzpayConfig() !== null;
 
-export function normalizeMarzpayTransaction(body) {
+export function normalizeMarzpayTransaction(body, direction = null) {
   const root = body?.data ?? body ?? {};
   const transaction = root.transaction ?? {};
   const collection = root.collection ?? {};
   const disbursement = root.disbursement ?? {};
-  const amount = collection.amount ?? disbursement.amount ?? transaction.amount ?? {};
-  const raw = amount.raw ?? amount.value ?? null;
+  const preferred = direction === 'disbursement' ? disbursement
+    : direction === 'collection' ? collection
+      : null;
+  const amount = preferred?.amount ?? collection.amount ?? disbursement.amount ?? transaction.amount ?? root.amount ?? {};
+  const raw = amount && typeof amount === 'object'
+    ? amount.raw ?? amount.value ?? amount.amount ?? null
+    : amount;
   return {
-    uuid: transaction.uuid ?? collection.uuid ?? disbursement.uuid ?? null,
-    reference: transaction.reference ?? collection.reference ?? disbursement.reference ?? null,
-    status: transaction.status ?? collection.status ?? disbursement.status ?? null,
-    mode: collection.mode ?? disbursement.mode ?? transaction.mode ?? null,
-    currency: amount.currency ?? null,
+    uuid: transaction.uuid ?? preferred?.uuid ?? collection.uuid ?? disbursement.uuid ?? null,
+    reference: transaction.reference ?? preferred?.reference ?? collection.reference ?? disbursement.reference ?? null,
+    status: transaction.status ?? preferred?.status ?? collection.status ?? disbursement.status ?? null,
+    mode: preferred?.mode ?? collection.mode ?? disbursement.mode ?? transaction.mode ?? null,
+    currency: (amount && typeof amount === 'object' ? amount.currency : null) ??
+      preferred?.currency ?? transaction.currency ?? collection.currency ?? disbursement.currency ?? root.currency ?? null,
     amountMinor: normalizeAmountMinor(raw),
-    provider: collection.provider ?? disbursement.provider ?? transaction.provider ?? null,
-    message: transaction.message ?? collection.message ?? disbursement.message ?? root.message ?? null,
+    provider: preferred?.provider ?? collection.provider ?? disbursement.provider ?? transaction.provider ?? null,
+    message: transaction.message ?? preferred?.message ?? collection.message ?? disbursement.message ?? root.message ?? null,
   };
 }
 
@@ -85,14 +91,14 @@ export async function collectMarzpayMoney({ amountUgx, phone, reference, descrip
   if (!response.ok || String(response.json?.status || '').toLowerCase() === 'error') {
     return { ok: false, outcomeUnknown: response.status === 0 || response.status >= 500, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
   }
-  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json), error: null };
+  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json, 'collection'), error: null };
 }
 
 export async function getMarzpayCollection(uuid) {
   if (!/^[0-9a-fA-F-]{20,64}$/.test(String(uuid || ''))) return { ok: false, transaction: null, error: 'Invalid provider transaction ID' };
   const response = await requestMarzpay('GET', `/collect-money/${encodeURIComponent(uuid)}`);
   if (!response.ok) return { ok: false, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
-  return { ok: true, transaction: normalizeMarzpayTransaction(response.json), error: null };
+  return { ok: true, transaction: normalizeMarzpayTransaction(response.json, 'collection'), error: null };
 }
 
 export async function sendMarzpayMoney({ amountUgx, phone, reference, description, callbackUrl, metadata = [] }) {
@@ -110,14 +116,14 @@ export async function sendMarzpayMoney({ amountUgx, phone, reference, descriptio
   if (!response.ok || String(response.json?.status || '').toLowerCase() === 'error') {
     return { ok: false, outcomeUnknown: response.status === 0 || response.status >= 500, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
   }
-  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json), error: null };
+  return { ok: true, outcomeUnknown: false, transaction: normalizeMarzpayTransaction(response.json, 'disbursement'), error: null };
 }
 
 export async function getMarzpayDisbursement(uuid) {
   if (!/^[0-9a-fA-F-]{20,64}$/.test(String(uuid || ''))) return { ok: false, transaction: null, error: 'Invalid provider transaction ID' };
   const response = await requestMarzpay('GET', `/send-money/${encodeURIComponent(uuid)}`);
   if (!response.ok) return { ok: false, transaction: null, error: String(response.error || `MarzPay returned HTTP ${response.status}`).slice(0, 240) };
-  return { ok: true, transaction: normalizeMarzpayTransaction(response.json), error: null };
+  return { ok: true, transaction: normalizeMarzpayTransaction(response.json, 'disbursement'), error: null };
 }
 
 export function verifyMarzpayWebhook(rawBody, signatureHeader, secret, nowMs = Date.now()) {
