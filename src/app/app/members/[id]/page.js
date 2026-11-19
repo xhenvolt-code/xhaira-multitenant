@@ -8,6 +8,7 @@ import {
   ClipboardList, AlertCircle, Clock,
 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useMembersData } from '../members-data-context';
 import { useToast } from '@/components/ui/Toast';
 import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link from 'next/link';
@@ -52,8 +53,9 @@ const EMPTY_EDIT = {
 
 export default function MemberDetailPage() {
   const { id } = useParams();
+  const { getMember, rememberMember } = useMembersData();
   const toast = useToast();
-  const [member, setMember] = useState(null);
+  const [member, setMember] = useState(() => getMember(id));
   const [memberFields, setMemberFields] = useState([]);
   const [memberDocuments, setMemberDocuments] = useState([]);
   const [documentConfigs, setDocumentConfigs] = useState([]);
@@ -61,7 +63,9 @@ export default function MemberDetailPage() {
   const [documentFile, setDocumentFile] = useState(null);
   const [uploadingDocument, setUploadingDocument] = useState(false);
   const [accounts, setAccounts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState('');
+  const [loading, setLoading] = useState(() => !getMember(id));
   const [memberLoadError, setMemberLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('Profile');
   const [editing, setEditing] = useState(false);
@@ -84,34 +88,73 @@ export default function MemberDetailPage() {
   // Audit trail
   const [auditLog, setAuditLog] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const dataRequestId = useRef(0);
+  const accountsRequestId = useRef(0);
+  const accountsMemberId = useRef(id);
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchAccounts = async (memberId = id) => {
+    const requestId = ++accountsRequestId.current;
+    if (accountsMemberId.current !== memberId) {
+      accountsMemberId.current = memberId;
+      setAccounts([]);
+    }
+    setAccountsLoading(true);
+    setAccountsError('');
+    try {
+      const response = await fetchWithAuth(`/api/members/${memberId}/accounts`, { cache: 'no-store' });
+      const result = await response.json();
+      if (requestId !== accountsRequestId.current) return;
+      if (!response._ok || !result.success) {
+        setAccountsError(result.error || 'Could not load member accounts. Please try again.');
+        return;
+      }
+      setAccounts(result.data || []);
+    } catch (error) {
+      if (requestId === accountsRequestId.current) {
+        setAccountsError(error.message || 'Could not load member accounts. Please try again.');
+      }
+    } finally {
+      if (requestId === accountsRequestId.current) setAccountsLoading(false);
+    }
+  };
+
+  const fetchData = async ({ refreshMember = false } = {}) => {
+    const requestId = ++dataRequestId.current;
+    const cachedMember = refreshMember ? null : getMember(id);
+    if (cachedMember) {
+      setMember(cachedMember);
+      setLoading(false);
+      setMemberLoadError('');
+    } else {
+      setLoading(true);
+    }
+    void fetchAccounts(id);
     setMemberLoadError('');
     setAccountTypes([]);
     setAccountTypesError('');
     setNewAccount((current) => ({ ...current, account_type_id: '' }));
     try {
-      const [memberRes, accountsRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
-        fetchWithAuth(`/api/members/${id}`, { cache: 'no-store' }),
-        fetchWithAuth(`/api/members/${id}/accounts`, { cache: 'no-store' }),
+      const [memberRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
+        cachedMember ? Promise.resolve(null) : fetchWithAuth(`/api/members/${id}`, { cache: 'no-store' }),
         fetchWithAuth('/api/account-types', { cache: 'no-store' }),
         fetchWithAuth('/api/member-field-configs', { cache: 'no-store' }),
         fetchWithAuth(`/api/member-documents?member_id=${id}`, { cache: 'no-store' }),
         fetchWithAuth('/api/member-document-configs', { cache: 'no-store' }),
       ]);
-      const memberJson = await memberRes.json();
-      const accountsJson = await accountsRes.json();
+      if (requestId !== dataRequestId.current) return;
+      const memberJson = cachedMember
+        ? { success: true, data: cachedMember }
+        : await memberRes.json();
       const typesJson = await typesRes.json();
       const fieldsJson = await fieldsRes.json();
       if (fieldsJson.success) setMemberFields(fieldsJson.data || []);
       const docsJson = await docsRes.json();
       const docConfigsJson = await docConfigsRes.json();
       if (!memberJson.success) {
-        setMemberLoadError(memberRes._status === 404
+        setMemberLoadError(memberRes?._status === 404
           ? 'Member not found or you do not have access to it.'
           : memberJson.error || 'Could not load this member. Please try again.');
-        setMember(null);
+        if (!cachedMember) setMember(null);
         return;
       }
       if (docsJson.success) setMemberDocuments(docsJson.data || []);
@@ -122,6 +165,7 @@ export default function MemberDetailPage() {
       }
       if (memberJson.success) {
         const m = memberJson.data;
+        rememberMember(m);
         setMember(m);
         setEditForm({
           first_name: m.first_name || '',
@@ -149,7 +193,6 @@ export default function MemberDetailPage() {
             .map((field) => [field.field_name, m.custom_fields[field.field_name]])),
         });
       }
-      if (accountsJson.success) setAccounts(accountsJson.data || []);
       if (typesJson.success) {
         setAccountTypes(typesJson.data || []);
         setAccountTypesError('');
@@ -161,10 +204,11 @@ export default function MemberDetailPage() {
         setNewAccount((current) => ({ ...current, account_type_id: '' }));
       }
     } catch (err) {
+      if (requestId !== dataRequestId.current) return;
       console.error(err);
       setMemberLoadError(err.message || 'Could not load this member. Please try again.');
     } finally {
-      setLoading(false);
+      if (requestId === dataRequestId.current) setLoading(false);
     }
   };
 
@@ -181,7 +225,13 @@ export default function MemberDetailPage() {
     }
   };
 
-  useEffect(() => { fetchData(); }, [id]);
+  useEffect(() => {
+    fetchData();
+    return () => {
+      dataRequestId.current += 1;
+      accountsRequestId.current += 1;
+    };
+  }, [id]);
   useEffect(() => {
     if (activeTab === 'Audit Trail') fetchAuditLog();
   }, [activeTab]);
@@ -198,7 +248,8 @@ export default function MemberDetailPage() {
       if (json.success) {
         toast.success('Member updated');
         setEditing(false);
-        fetchData();
+        rememberMember(json.data);
+        setMember((current) => ({ ...current, ...json.data }));
       } else {
         toast.error(json.error || 'Update failed');
       }
@@ -223,7 +274,7 @@ export default function MemberDetailPage() {
       if (!result.success) return toast.error(result.error || 'Upload failed');
       toast.success('Private document uploaded');
       setDocumentFile(null);
-      fetchData();
+      fetchData({ refreshMember: true });
     } catch { toast.error('Upload failed'); }
     finally { setUploadingDocument(false); }
   };
@@ -238,7 +289,8 @@ export default function MemberDetailPage() {
       const json = await res.json();
       if (json.success) {
         toast.success(`Member ${newStatus}`);
-        fetchData();
+        rememberMember(json.data);
+        setMember((current) => ({ ...current, ...json.data }));
       } else {
         toast.error(json.error || 'Failed to update status');
       }
@@ -261,7 +313,7 @@ export default function MemberDetailPage() {
         toast.success('Account opened');
         setShowNewAccount(false);
         setNewAccount({ account_type_id: accountTypes[0]?.id || '', currency: 'UGX' });
-        fetchData();
+        fetchAccounts();
       } else {
         toast.error(json.error || 'Failed to open account');
       }
@@ -294,7 +346,7 @@ export default function MemberDetailPage() {
         setTxModal(null);
         setTxAmount('');
         setTxDescription('');
-        fetchData();
+        fetchAccounts();
         if (selectedAccount === txModal.accountId) fetchLedger(txModal.accountId);
       } else {
         toast.error(json.error || 'Transaction failed');
@@ -722,10 +774,19 @@ export default function MemberDetailPage() {
             </form>
           )}
 
-          {accounts.length === 0 ? (
+          {accountsLoading && accounts.length === 0 ? (
+            <p role="status" className="text-sm text-muted-foreground">Loading accounts...</p>
+          ) : accountsError && accounts.length === 0 ? (
+            <div role="alert" className="text-sm text-red-600">
+              <p>{accountsError}</p>
+              <button type="button" onClick={() => fetchAccounts()} className="mt-2 underline">Retry loading accounts</button>
+            </div>
+          ) : accounts.length === 0 ? (
             <p className="text-sm text-muted-foreground">No accounts yet. Open an account to start transacting.</p>
           ) : (
             <div className="space-y-2">
+              {accountsError && <p role="alert" className="text-sm text-amber-700">{accountsError}</p>}
+              {accountsLoading && <p role="status" className="text-sm text-muted-foreground">Refreshing accounts...</p>}
               {accounts.map(a => {
                 const accId = a.member_account_id || a.id;
                 return (
@@ -893,7 +954,7 @@ export default function MemberDetailPage() {
           account={{ memberAccountId: txModeModal.accountId, label: `${member?.full_name || 'Member'} · ${txModeModal.account.account_number || ''}`, balance: txModeModal.account.balance }}
           onClose={() => setTxModeModal(null)}
           onManual={(paymentMethod) => { setTxModeModal(null); setTxModal({ action: txModeModal.action, accountId: txModeModal.accountId, accountNumber: txModeModal.account.account_number, paymentMethod }); }}
-          onSuccess={() => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); setTxModeModal(null); fetchData(); fetchLedger(txModeModal.accountId); }}
+          onSuccess={() => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); setTxModeModal(null); fetchAccounts(); fetchLedger(txModeModal.accountId); }}
         />
       )}
       {txModal && (

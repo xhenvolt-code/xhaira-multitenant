@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, Users, Search, UserCheck, UserX, Phone, Mail, CreditCard, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency as fmtCurrency } from '@/lib/format-currency';
 import Link from 'next/link';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
+import { useMembersData } from './members-data-context';
 
 const STATUS_STYLES = {
   active: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -16,37 +17,69 @@ const STATUS_STYLES = {
 };
 
 export default function MembersPage() {
+  const { rememberMembers } = useMembersData();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const membersRequestId = useRef(0);
 
   const fetchMembers = async () => {
+    const requestId = ++membersRequestId.current;
     setLoading(true);
     setLoadError('');
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (statusFilter) params.set('status', statusFilter);
-      const res = await fetchWithAuth(`/api/members?${params}`, { cache: 'no-store' });
-      const json = await res.json();
-      if (json.success) setMembers(json.data || []);
-      else {
-        setMembers([]);
-        setLoadError(json.error || 'Could not load members. Please try again.');
+      params.set('limit', '100');
+      params.set('page', '1');
+      const firstResponse = await fetchWithAuth(`/api/members?${params}`, { cache: 'no-store' });
+      const firstPage = await firstResponse.json();
+      if (!firstResponse._ok || !firstPage.success) {
+        throw new Error(firstPage.error || 'Could not load members. Please try again.');
       }
+
+      const totalPages = Math.max(1, Number(firstPage.pagination?.totalPages) || 1);
+      const remainingPages = [];
+      for (let firstPageNumber = 2; firstPageNumber <= totalPages; firstPageNumber += 5) {
+        const pageNumbers = Array.from(
+          { length: Math.min(5, totalPages - firstPageNumber + 1) },
+          (_, index) => firstPageNumber + index
+        );
+        const pages = await Promise.all(pageNumbers.map(async (pageNumber) => {
+          const pageParams = new URLSearchParams(params);
+          pageParams.set('page', String(pageNumber));
+          const response = await fetchWithAuth(`/api/members?${pageParams}`, { cache: 'no-store' });
+          const page = await response.json();
+          if (!response._ok || !page.success) {
+            throw new Error(page.error || `Could not load members page ${pageNumber}.`);
+          }
+          return page.data || [];
+        }));
+        remainingPages.push(...pages);
+        if (requestId !== membersRequestId.current) return;
+      }
+
+      if (requestId !== membersRequestId.current) return;
+      const loadedMembers = [...(firstPage.data || []), ...remainingPages.flat()];
+      setMembers(loadedMembers);
+      rememberMembers(loadedMembers);
     } catch (err) {
+      if (requestId !== membersRequestId.current) return;
       console.error('Failed to fetch members:', err);
-      setMembers([]);
-      setLoadError('Could not load members. Please check your connection and try again.');
+      setLoadError(err.message || 'Could not load members. Please check your connection and try again.');
     } finally {
-      setLoading(false);
+      if (requestId === membersRequestId.current) setLoading(false);
     }
   };
 
-  useEffect(() => { fetchMembers(); }, [search, statusFilter]);
+  useEffect(() => {
+    fetchMembers();
+    return () => { membersRequestId.current += 1; };
+  }, [search, statusFilter]);
 
   const activeCount = members.filter(m => m.status === 'active').length;
   const totalBalance = members.reduce((sum, m) => sum + parseFloat(m.total_balance || 0), 0);

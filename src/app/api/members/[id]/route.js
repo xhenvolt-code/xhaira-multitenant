@@ -6,7 +6,7 @@ import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 const PRIVATE_NO_STORE = { headers: { 'Cache-Control': 'private, no-store' } };
 
-// GET /api/members/[id] — Get member details with accounts
+// GET /api/members/[id] — Get member details
 export async function GET(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.view');
@@ -15,21 +15,13 @@ export async function GET(request, { params }) {
 
     const { id } = await params;
 
-    const [memberResult, accountsResult] = await Promise.all([
-      query(
-        `SELECT m.*, u.name as user_name, u.email as user_email
-         FROM members m
-         LEFT JOIN users u ON m.user_id = u.id AND u.organization_id = m.organization_id
-         WHERE m.id = $1 AND m.organization_id = $2`,
-        [id, perm.auth.organizationId]
-      ),
-      query(
-        `SELECT * FROM member_accounts
-          WHERE member_id = $1 AND organization_id = $2
-          ORDER BY created_at DESC`,
-        [id, perm.auth.organizationId]
-      ),
-    ]);
+    const memberResult = await query(
+      `SELECT m.*, u.name as user_name, u.email as user_email
+       FROM members m
+       LEFT JOIN users u ON m.user_id = u.id AND u.organization_id = m.organization_id
+       WHERE m.id = $1 AND m.organization_id = $2`,
+      [id, perm.auth.organizationId]
+    );
 
     if (memberResult.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404, ...PRIVATE_NO_STORE });
@@ -49,7 +41,6 @@ export async function GET(request, { params }) {
         missing_required_fields: missingRequiredFields,
         profile_incomplete: missingRequiredFields.length > 0 || missingDocuments.length > 0,
         missing_required_documents: missingDocuments,
-        accounts: accountsResult.rows,
       },
     }, PRIVATE_NO_STORE);
     });
