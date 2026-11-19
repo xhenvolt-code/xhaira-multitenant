@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, Users, DollarSign, CheckCircle, Calendar, AlertTriangle, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Users, DollarSign, CheckCircle, Calendar, AlertTriangle, Edit2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import { PayoutModal } from '@/components/modals/PayoutModal';
+import { EmployeeAccountModal } from '@/components/modals/EmployeeAccountModal';
 
 export default function HRPage() {
   const [activeTab, setActiveTab] = useState('employees');
@@ -13,6 +14,7 @@ export default function HRPage() {
   const [employeeAccounts, setEmployeeAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [showEmployeeAccountModal, setShowEmployeeAccountModal] = useState(false);
   const [selectedStaffId, setSelectedStaffId] = useState(null);
   const toast = useToast();
 
@@ -62,21 +64,6 @@ export default function HRPage() {
 
   const handlePayoutSuccess = () => {
     loadHRData();
-  };
-
-  const handleDeletePayout = async (id) => {
-    if (confirm('Delete this payout record?')) {
-      try {
-        const res = await fetchWithAuth(`/api/payouts/${id}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (data.success) {
-          toast.success('Payout deleted');
-          loadHRData();
-        }
-      } catch (err) {
-        toast.error('Failed to delete payout');
-      }
-    }
   };
 
   return (
@@ -156,7 +143,7 @@ export default function HRPage() {
                           <button
                             onClick={() => openPayoutModal(emp.id)}
                             className={styles.actionBtn}
-                            title="Record payment"
+                            title="Credit staff wallet"
                           >
                             <DollarSign size={16} />
                           </button>
@@ -177,8 +164,8 @@ export default function HRPage() {
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
               <h2>Employee Accounts</h2>
-              <button className={styles.btn} onClick={() => {/* TODO: Add employee account modal */}}>
-                <Plus size={18} /> Link Account
+              <button className={styles.btn} onClick={() => setShowEmployeeAccountModal(true)}>
+                <Plus size={18} /> Create Staff Wallet
               </button>
             </div>
             {loading ? (
@@ -244,7 +231,7 @@ export default function HRPage() {
                   setShowPayoutModal(true);
                 }}
               >
-                <Plus size={18} /> Record Payout
+                <Plus size={18} /> Credit Staff Wallet
               </button>
             </div>
             {loading ? (
@@ -262,7 +249,6 @@ export default function HRPage() {
                       <th>Date</th>
                       <th>Status</th>
                       <th>Reference</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -289,15 +275,6 @@ export default function HRPage() {
                           </span>
                         </td>
                         <td>{payout.reference || '-'}</td>
-                        <td>
-                          <button
-                            className={styles.actionBtn}
-                            onClick={() => handleDeletePayout(payout.id)}
-                            title="Delete"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -312,6 +289,13 @@ export default function HRPage() {
         isOpen={showPayoutModal}
         onClose={() => setShowPayoutModal(false)}
         staffId={selectedStaffId}
+        staffList={staff}
+        onSuccess={handlePayoutSuccess}
+      />
+      <EmployeeAccountModal
+        isOpen={showEmployeeAccountModal}
+        onClose={() => setShowEmployeeAccountModal(false)}
+        staffList={staff}
         onSuccess={handlePayoutSuccess}
       />
     </div>

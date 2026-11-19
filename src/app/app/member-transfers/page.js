@@ -39,9 +39,11 @@ export default function MemberTransfersPage() {
     try {
       const res = await fetchWithAuth('/api/member-transfers');
       const json = await res.json();
-      if (json.success) setTransfers(json.data || []);
+      if (!json.success) throw new Error(json.error || 'Could not load transfer history.');
+      setTransfers(json.data || []);
     } catch (err) {
       console.error('Failed to fetch transfers:', err);
+      toast.error(err.message || 'Could not load transfer history.');
     } finally {
       setLoading(false);
     }
@@ -51,9 +53,11 @@ export default function MemberTransfersPage() {
     try {
       const res = await fetchWithAuth('/api/members?status=active');
       const json = await res.json();
-      if (json.success) setMembers(json.data || []);
+      if (!json.success) throw new Error(json.error || 'Could not load members.');
+      setMembers(json.data || []);
     } catch (err) {
       console.error('Failed to fetch members:', err);
+      toast.error(err.message || 'Could not load members.');
     }
   };
 
@@ -69,11 +73,13 @@ export default function MemberTransfersPage() {
     try {
       const res = await fetchWithAuth(`/api/members/${memberId}/accounts`);
       const json = await res.json();
+      if (!json.success) throw new Error(json.error || 'Could not load member accounts.');
       const accounts = (json.data || []).filter(a => a.allows_withdrawal !== false);
       if (side === 'sender') setSenderAccounts(accounts);
       else setReceiverAccounts(accounts);
     } catch (err) {
       console.error('Failed to fetch accounts:', err);
+      toast.error(err.message || 'Could not load member accounts.');
     }
   };
 

@@ -1,89 +1,108 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
-// GET /api/employee-accounts/[id]
 export async function GET(request, { params }) {
   const perm = await requirePermission(request, 'staff.view');
   if (perm instanceof NextResponse) return perm;
-  
+  const organizationId = perm.auth.organizationId;
+
   try {
-    const { id } = params;
-    
-    const result = await query(
-      `SELECT ea.*, s.name as staff_name, a.name as account_name
-       FROM employee_accounts ea
-       LEFT JOIN staff s ON ea.staff_id = s.id
-       LEFT JOIN accounts a ON ea.account_id = a.id
-       WHERE ea.id = $1`,
-      [id]
-    );
-    
-    if (!result.rows[0]) {
-      return NextResponse.json({ success: false, error: 'Employee account not found' }, { status: 404 });
-    }
-    
-    return NextResponse.json({ success: true, data: result.rows[0] });
+    return await runWithOrganizationContext(organizationId, async () => {
+      const { id } = await params;
+      const result = await query(
+        `SELECT ea.id, ea.organization_id, ea.staff_id, ea.account_id, ea.currency,
+                ea.status, ea.notes, ea.created_at, ea.updated_at,
+                s.name AS staff_name, a.name AS account_name,
+                COALESCE(SUM(
+                  CASE WHEN le.entry_type = 'CREDIT' THEN le.amount
+                       WHEN le.entry_type = 'DEBIT' THEN -le.amount
+                       ELSE 0 END
+                ), 0) AS balance
+           FROM employee_accounts ea
+           JOIN staff s ON s.id = ea.staff_id AND s.organization_id = ea.organization_id
+           JOIN accounts a ON a.id = ea.account_id AND a.organization_id = ea.organization_id
+           LEFT JOIN ledger_entries le
+             ON le.employee_account_id = ea.id
+            AND le.organization_id = ea.organization_id
+          WHERE ea.id = $1 AND ea.organization_id = $2
+          GROUP BY ea.id, s.name, a.name`,
+        [id, organizationId]
+      );
+      if (!result.rows[0]) {
+        return NextResponse.json({ success: false, error: 'Employee wallet not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, data: result.rows[0] });
+    });
   } catch (error) {
-    console.error('[Employee Account Detail] GET error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to fetch employee account' }, { status: 500 });
+    console.error('[Employee Account] GET error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to fetch employee wallet' }, { status: 500 });
   }
 }
 
-// PATCH /api/employee-accounts/[id]
 export async function PATCH(request, { params }) {
   const perm = await requirePermission(request, 'staff.edit');
   if (perm instanceof NextResponse) return perm;
-  
+  const organizationId = perm.auth.organizationId;
+
   try {
-    const { id } = params;
     const body = await request.json();
-    const { balance, status, notes } = body;
-    
-    const result = await query(
-      `UPDATE employee_accounts
-       SET balance = COALESCE($1, balance),
-           status = COALESCE($2, status),
-           notes = COALESCE($3, notes),
-           updated_at = NOW()
-       WHERE id = $4
-       RETURNING *`,
-      [balance, status, notes, id]
-    );
-    
-    if (!result.rows[0]) {
-      return NextResponse.json({ success: false, error: 'Employee account not found' }, { status: 404 });
+    if (Object.prototype.hasOwnProperty.call(body || {}, 'balance')) {
+      return NextResponse.json({ success: false, error: 'Wallet balance is ledger-derived and cannot be edited.' }, { status: 400 });
     }
-    
-    return NextResponse.json({ success: true, data: result.rows[0] });
+    const { status, notes } = body || {};
+    if (status !== undefined && !['active', 'suspended', 'closed'].includes(status)) {
+      return NextResponse.json({ success: false, error: 'Invalid employee wallet status' }, { status: 400 });
+    }
+    if (notes !== undefined && typeof notes !== 'string' && notes !== null) {
+      return NextResponse.json({ success: false, error: 'notes must be a string or null' }, { status: 400 });
+    }
+
+    return await runWithOrganizationContext(organizationId, async () => {
+      const { id } = await params;
+      const result = await query(
+        `UPDATE employee_accounts
+            SET status = COALESCE($1, status),
+                notes = COALESCE($2, notes),
+                updated_at = NOW()
+          WHERE id = $3 AND organization_id = $4
+          RETURNING id, staff_id, account_id, currency, status, notes, updated_at`,
+        [status ?? null, notes ?? null, id, organizationId]
+      );
+      if (!result.rows[0]) {
+        return NextResponse.json({ success: false, error: 'Employee wallet not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, data: result.rows[0] });
+    });
   } catch (error) {
-    console.error('[Employee Account Detail] PATCH error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to update employee account' }, { status: 500 });
+    console.error('[Employee Account] PATCH error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to update employee wallet' }, { status: 500 });
   }
 }
 
-// DELETE /api/employee-accounts/[id]
 export async function DELETE(request, { params }) {
   const perm = await requirePermission(request, 'staff.delete');
   if (perm instanceof NextResponse) return perm;
-  
+  const organizationId = perm.auth.organizationId;
+
   try {
-    const { id } = params;
-    
-    const result = await query(
-      `DELETE FROM employee_accounts
-       WHERE id = $1
-       RETURNING id`,
-      [id]
-    );
-    
-    if (!result.rows[0]) {
-      return NextResponse.json({ success: false, error: 'Employee account not found' }, { status: 404 });
-    }
-    
-    return NextResponse.json({ success: true, data: { id } });
+    return await runWithOrganizationContext(organizationId, async () => {
+      const { id } = await params;
+      const result = await query(
+        `UPDATE employee_accounts
+            SET status = 'closed', updated_at = NOW()
+          WHERE id = $1 AND organization_id = $2
+          RETURNING id`,
+        [id, organizationId]
+      );
+      if (!result.rows[0]) {
+        return NextResponse.json({ success: false, error: 'Employee wallet not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, data: result.rows[0] });
+    });
   } catch (error) {
-    console.error('[Employee Account Detail] DELETE error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to delete employee account' }, { status: 500 });
+    console.error('[Employee Account] DELETE error:', error);
+    return NextResponse.json({ success: false, error: 'Failed to close employee wallet' }, { status: 500 });
   }
 }

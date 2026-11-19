@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Save, AlertTriangle } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import Modal from '@/components/ui/Modal';
 
-export function PayoutModal({ isOpen, onClose, staffId, onSuccess }) {
+export function PayoutModal({ isOpen, onClose, staffId, staffList = [], onSuccess }) {
   const toast = useToast();
   const [formData, setFormData] = useState({
     staff_id: staffId || '', account_id: '', amount: '', currency: 'UGX',
     payout_type: 'salary', description: '', reference: '', payout_date: new Date().toISOString().split('T')[0], notes: ''
   });
+  const [idempotencyKey, setIdempotencyKey] = useState('');
+  const idempotencyKeyRef = useRef('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [accounts, setAccounts] = useState([]);
@@ -23,13 +25,17 @@ export function PayoutModal({ isOpen, onClose, staffId, onSuccess }) {
 
   const fetchAccounts = async () => {
     try {
-      const res = await fetchWithAuth('/api/accounts');
-      if (res.ok) {
-        const data = await res.json();
-        setAccounts(data.data || []);
-      }
+      const data = await fetchWithAuth('/api/accounts');
+      if (!data.success) throw new Error(data.error || 'Failed to load organization accounts');
+      setAccounts((data.data || []).filter(account =>
+        account.currency === 'UGX' &&
+        ['bank', 'cash', 'mobile_money', 'system'].includes(account.type) &&
+        account.is_active &&
+        account.status === 'active'
+      ));
     } catch (err) {
       console.error('Failed to fetch accounts:', err);
+      setError(err.message || 'Failed to load organization accounts');
     }
   };
 
@@ -45,22 +51,26 @@ export function PayoutModal({ isOpen, onClose, staffId, onSuccess }) {
       setError('Staff, account, and amount are required');
       return;
     }
+    const key = idempotencyKeyRef.current || idempotencyKey || crypto.randomUUID();
+    idempotencyKeyRef.current = key;
+    if (!idempotencyKey) setIdempotencyKey(key);
     setIsLoading(true);
 
     try {
-      const res = await fetchWithAuth('/api/payouts', {
+      const data = await fetchWithAuth('/api/payouts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
         body: JSON.stringify(formData)
       });
 
-      const data = await res.json();
-      if (!res.ok) {
+      if (!data.success) {
         setError(data.error || 'Failed to create payout');
         return;
       }
 
-      toast.success('Payout created successfully');
+      toast.success('Funds credited to the staff wallet');
+      idempotencyKeyRef.current = '';
+      setIdempotencyKey('');
       setFormData({
         staff_id: staffId || '', account_id: '', amount: '', currency: 'UGX',
         payout_type: 'salary', description: '', reference: '', payout_date: new Date().toISOString().split('T')[0], notes: ''
@@ -77,21 +87,33 @@ export function PayoutModal({ isOpen, onClose, staffId, onSuccess }) {
   const inputClass = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm';
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Record Payout" size="md" footer={
+    <Modal isOpen={isOpen} onClose={onClose} title="Credit Staff Wallet" size="md" footer={
       <div className="flex items-center justify-between">
         <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:bg-muted transition">Cancel</button>
-        <button onClick={handleSubmit} disabled={isLoading} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition text-sm"><Save className="w-4 h-4" /> {isLoading ? 'Recording...' : 'Record Payout'}</button>
+        <button onClick={handleSubmit} disabled={isLoading} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition text-sm"><Save className="w-4 h-4" /> {isLoading ? 'Posting...' : 'Credit Wallet'}</button>
       </div>
     }>
       <div className="space-y-4">
         {error && <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 px-4 py-3 rounded-lg text-sm"><AlertTriangle className="w-4 h-4 shrink-0" /> {error}</div>}
+        <p className="text-sm text-amber-700 dark:text-amber-400">
+          This immediately moves UGX from the selected organization account to the staff member’s internal wallet. It does not send mobile money or a bank payment.
+        </p>
+        {!staffId && (
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1">Staff member *</label>
+            <select name="staff_id" value={formData.staff_id} onChange={handleChange} className={inputClass} required>
+              <option value="">Select staff...</option>
+              {staffList.map(staff => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+            </select>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="block text-sm font-medium text-foreground mb-1">Account *</label><select name="account_id" value={formData.account_id} onChange={handleChange} className={inputClass}><option value="">Select account...</option>{accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.type})</option>)}</select></div>
+          <div><label className="block text-sm font-medium text-foreground mb-1">Organization source account *</label><select name="account_id" value={formData.account_id} onChange={handleChange} className={inputClass}><option value="">Select account...</option>{accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.type})</option>)}</select>{accounts.length === 0 && <p className="mt-1 text-xs text-amber-700">No active UGX source accounts are available.</p>}</div>
           <div><label className="block text-sm font-medium text-foreground mb-1">Payout Type *</label><select name="payout_type" value={formData.payout_type} onChange={handleChange} className={inputClass}><option value="salary">Salary</option><option value="bonus">Bonus</option><option value="commission">Commission</option><option value="reimbursement">Reimbursement</option></select></div>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="block text-sm font-medium text-foreground mb-1">Amount *</label><input type="number" name="amount" value={formData.amount} onChange={handleChange} placeholder="0.00" step="0.01" min="0" className={inputClass} /></div>
-          <div><label className="block text-sm font-medium text-foreground mb-1">Currency</label><select name="currency" value={formData.currency} onChange={handleChange} className={inputClass}><option value="UGX">UGX</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option><option value="KES">KES</option></select></div>
+          <div><label className="block text-sm font-medium text-foreground mb-1">Amount (UGX) *</label><input type="number" name="amount" value={formData.amount} onChange={handleChange} placeholder="0" step="0.01" min="0.01" className={inputClass} /></div>
+          <div><label className="block text-sm font-medium text-foreground mb-1">Currency</label><input value="UGX" readOnly className={inputClass} /></div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="block text-sm font-medium text-foreground mb-1">Payout Date</label><input type="date" name="payout_date" value={formData.payout_date} onChange={handleChange} className={inputClass} /></div>

@@ -3,6 +3,7 @@ import { query } from '@/lib/db.js';
 import { verifyAuth } from '@/lib/auth-utils.js';
 import { dispatch } from '@/lib/system-events.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/transfers
 export async function GET(request) {
@@ -38,6 +39,29 @@ export async function POST(request) {
     }
     if (from_account_id === to_account_id) {
       return NextResponse.json({ success: false, error: 'Cannot transfer to same account' }, { status: 400 });
+    }
+
+    const accountGuard = await runWithOrganizationContext(auth.organizationId, () => query(
+      `SELECT a.id, a.type,
+              EXISTS (
+                SELECT 1
+                  FROM employee_accounts ea
+                 WHERE ea.account_id = a.id
+                   AND ea.organization_id = a.organization_id
+              ) AS is_staff_wallet
+         FROM accounts a
+        WHERE a.id = ANY($1::uuid[])
+          AND a.organization_id = $2`,
+      [[from_account_id, to_account_id], auth.organizationId]
+    ));
+    if (accountGuard.rows.length !== 2) {
+      return NextResponse.json({ success: false, error: 'One or both accounts were not found in this organization' }, { status: 404 });
+    }
+    if (accountGuard.rows.some(account => account.is_staff_wallet)) {
+      return NextResponse.json({ success: false, error: 'Staff wallets can only be credited through payroll; use the Employee Accounts workflow.' }, { status: 400 });
+    }
+    if (accountGuard.rows.some(account => account.type === 'internal')) {
+      return NextResponse.json({ success: false, error: 'Internal accounts cannot use standard organization transfers.' }, { status: 400 });
     }
 
     const txDate = transfer_date || new Date().toISOString().split('T')[0];

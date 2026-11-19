@@ -21,10 +21,18 @@ import { getAccountLedgerDelta } from './account-ledger.js';
  */
 export async function getSystemAccountId(client) {
   const result = await client.query(
-    `SELECT id FROM accounts WHERE type = 'system' AND name = 'SACCO Cash Account' LIMIT 1`
+    `SELECT id
+       FROM accounts
+      WHERE organization_id = public.current_organization_id()
+        AND is_primary_cash_account IS TRUE
+        AND type = 'system'
+        AND currency = 'UGX'
+        AND is_active IS TRUE
+        AND status = 'active'
+      LIMIT 1`
   );
   if (result.rows.length === 0) {
-    throw new Error('System cash account not found. Run migration 300_ledger_and_loans.mjs');
+    throw new Error('No active UGX primary cash account is configured for this organization.');
   }
   return result.rows[0].id;
 }
@@ -38,10 +46,18 @@ export async function getSystemAccountId(client) {
  * @param {string} [params.reference] - External reference (receipt #, loan ID, etc.)
  * @param {Object} [params.metadata] - Additional JSON metadata
  * @param {string} params.userId - User creating the transaction
- * @param {Array<{member_account_id?: string, account_id?: string, type: 'DEBIT'|'CREDIT', amount: number, currency?: string, description?: string}>} params.entries
+ * @param {Array<{member_account_id?: string, employee_account_id?: string, account_id?: string, type: 'DEBIT'|'CREDIT', amount: number, currency?: string, description?: string}>} params.entries
  * @returns {Promise<{transaction: Object, entries: Array}>}
  */
-export async function createTransaction({ description, transaction_type, reference, metadata, userId, entries }) {
+export async function createTransaction({
+  description,
+  transaction_type,
+  reference,
+  metadata,
+  userId,
+  entries,
+  client: transactionClient,
+}) {
   // Validation
   if (!description) throw new Error('Transaction description is required');
   if (!entries || entries.length < 2) throw new Error('Transaction must have at least 2 entries');
@@ -56,8 +72,8 @@ export async function createTransaction({ description, transaction_type, referen
     if (!entry.amount || entry.amount <= 0) {
       throw new Error(`Invalid amount: ${entry.amount}. Must be positive`);
     }
-    if (!entry.member_account_id && !entry.account_id) {
-      throw new Error('Each entry must reference a member_account_id or account_id');
+    if (!entry.member_account_id && !entry.employee_account_id && !entry.account_id) {
+      throw new Error('Each entry must reference a member_account_id, employee_account_id, or account_id');
     }
     if (entry.type === 'DEBIT') totalDebits += entry.amount;
     if (entry.type === 'CREDIT') totalCredits += entry.amount;
@@ -71,16 +87,21 @@ export async function createTransaction({ description, transaction_type, referen
   }
 
   const pool = getPool();
-  const client = await pool.connect();
+  const ownsClient = !transactionClient;
+  const client = transactionClient || await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    if (ownsClient) await client.query('BEGIN');
 
     // Verify all referenced accounts exist
     for (const entry of entries) {
       if (entry.member_account_id) {
         const acct = await client.query(
-          `SELECT id, status, currency FROM member_accounts WHERE id = $1`, [entry.member_account_id]
+          `SELECT id, status, currency
+             FROM member_accounts
+            WHERE id = $1
+              AND organization_id = public.current_organization_id()`,
+          [entry.member_account_id]
         );
         if (acct.rows.length === 0) throw new Error(`Member account ${entry.member_account_id} not found`);
         if (acct.rows[0].status === 'closed') throw new Error(`Member account ${entry.member_account_id} is closed`);
@@ -88,9 +109,27 @@ export async function createTransaction({ description, transaction_type, referen
           throw new Error(`Currency mismatch for member account ${entry.member_account_id}`);
         }
       }
+      if (entry.employee_account_id) {
+        const account = await client.query(
+          `SELECT id, status, currency
+             FROM employee_accounts
+            WHERE id = $1
+              AND organization_id = public.current_organization_id()`,
+          [entry.employee_account_id]
+        );
+        if (account.rows.length === 0) throw new Error(`Employee account ${entry.employee_account_id} not found`);
+        if (account.rows[0].status !== 'active') throw new Error(`Employee account ${entry.employee_account_id} is not active`);
+        if (account.rows[0].currency !== (entry.currency || 'UGX')) {
+          throw new Error(`Currency mismatch for employee account ${entry.employee_account_id}`);
+        }
+      }
       if (entry.account_id) {
         const acct = await client.query(
-          `SELECT id, is_active, currency FROM accounts WHERE id = $1`, [entry.account_id]
+          `SELECT id, is_active, currency
+             FROM accounts
+            WHERE id = $1
+              AND organization_id = public.current_organization_id()`,
+          [entry.account_id]
         );
         if (acct.rows.length === 0) throw new Error(`Account ${entry.account_id} not found`);
         if (acct.rows[0].currency !== (entry.currency || 'UGX')) {
@@ -111,12 +150,15 @@ export async function createTransaction({ description, transaction_type, referen
     const insertedEntries = [];
     for (const entry of entries) {
       const entryResult = await client.query(
-        `INSERT INTO ledger_entries (transaction_id, account_id, member_account_id, entry_type, amount, currency, description)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        `INSERT INTO ledger_entries
+           (transaction_id, account_id, member_account_id, employee_account_id, entry_type, amount, currency, description)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
         [
           transaction.id,
           entry.account_id || null,
           entry.member_account_id || null,
+          entry.employee_account_id || null,
           entry.type,
           entry.amount,
           entry.currency || 'UGX',
@@ -145,14 +187,14 @@ export async function createTransaction({ description, transaction_type, referen
       }
     }
 
-    await client.query('COMMIT');
+    if (ownsClient) await client.query('COMMIT');
 
     return { transaction, entries: insertedEntries };
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (ownsClient) await client.query('ROLLBACK');
     throw err;
   } finally {
-    client.release();
+    if (ownsClient) await client.release();
   }
 }
 
@@ -168,7 +210,8 @@ export async function getMemberAccountBalance(memberAccountId) {
             ELSE 0 END
      ), 0) AS balance
      FROM ledger_entries
-     WHERE member_account_id = $1`,
+     WHERE member_account_id = $1
+       AND organization_id = public.current_organization_id()`,
     [memberAccountId]
   );
   return parseFloat(result.rows[0].balance);
@@ -279,24 +322,72 @@ export async function transfer({
   if (senderAccountId === receiverAccountId) {
     throw new Error('Cannot transfer to the same account');
   }
-  if (!amount || amount <= 0) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('Transfer amount must be positive');
   }
 
-  // Check sender balance
-  const senderBalance = await getMemberAccountBalance(senderAccountId);
-  if (senderBalance < amount) {
-    throw new Error(`Insufficient balance. Available: ${senderBalance}, Requested: ${amount}`);
-  }
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [senderAccountId]
+    );
 
-  return await createTransaction({
-    description: description || 'Member-to-member transfer',
-    transaction_type: 'transfer',
-    reference,
-    userId,
-    entries: [
-      { member_account_id: senderAccountId, type: 'DEBIT', amount, description: 'Transfer sent' },
-      { member_account_id: receiverAccountId, type: 'CREDIT', amount, description: 'Transfer received' },
-    ],
-  });
+    const accounts = await client.query(
+      `SELECT id, member_id, status, currency
+         FROM member_accounts
+        WHERE id = ANY($1::uuid[])
+          AND organization_id = public.current_organization_id()
+        ORDER BY id
+        FOR UPDATE`,
+      [[senderAccountId, receiverAccountId]]
+    );
+    const sender = accounts.rows.find((account) => account.id === senderAccountId);
+    const receiver = accounts.rows.find((account) => account.id === receiverAccountId);
+    if (!sender) throw new Error(`Member account ${senderAccountId} not found`);
+    if (!receiver) throw new Error(`Member account ${receiverAccountId} not found`);
+    if (sender.status !== 'active' || receiver.status !== 'active') {
+      throw new Error('Both member accounts must be active');
+    }
+    if (receiver.currency !== sender.currency) {
+      throw new Error('Transfers require both accounts to use the same currency');
+    }
+
+    const balanceResult = await client.query(
+      `SELECT COALESCE(SUM(
+                CASE WHEN entry_type = 'CREDIT' THEN amount
+                     WHEN entry_type = 'DEBIT' THEN -amount
+                     ELSE 0 END
+              ), 0) AS balance
+         FROM ledger_entries
+        WHERE member_account_id = $1
+          AND organization_id = public.current_organization_id()`,
+      [senderAccountId]
+    );
+    const senderBalance = Number(balanceResult.rows[0]?.balance || 0);
+    if (senderBalance < amount) {
+      throw new Error(`Insufficient balance. Available: ${senderBalance}, Requested: ${amount}`);
+    }
+
+    const result = await createTransaction({
+      description: description || 'Member-to-member transfer',
+      transaction_type: 'transfer',
+      reference,
+      userId,
+      client,
+      entries: [
+        { member_account_id: senderAccountId, type: 'DEBIT', amount, description: 'Transfer sent' },
+        { member_account_id: receiverAccountId, type: 'CREDIT', amount, description: 'Transfer received' },
+      ],
+    });
+
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    await client.release();
+  }
 }

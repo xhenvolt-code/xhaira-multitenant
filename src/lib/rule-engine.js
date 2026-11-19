@@ -270,10 +270,13 @@ export async function validateTransfer(senderMemberId, receiverMemberId, senderA
     `SELECT ma.id, ma.account_type, at.allows_withdrawal, at.minimum_balance, at.name as type_name
      FROM member_accounts ma
      LEFT JOIN account_types at ON ma.account_type_id = at.id
-     WHERE ma.id = $1`,
+     WHERE ma.id = $1
+       AND ma.organization_id = public.current_organization_id()`,
     [senderAccountId]
   );
-  if (acct.rows.length > 0) {
+  if (acct.rows.length === 0) {
+    issues.push('Sender account not found');
+  } else {
     const a = acct.rows[0];
     if (a.allows_withdrawal === false) {
       issues.push(`Account type "${a.type_name || a.account_type}" does not allow withdrawals`);
@@ -296,8 +299,14 @@ export async function validateTransfer(senderMemberId, receiverMemberId, senderA
   const todayTransfers = await pool.query(
     `SELECT COUNT(*) as count FROM transactions t
      JOIN ledger_entries le ON le.transaction_id = t.id
+       AND le.organization_id = t.organization_id
+     JOIN member_accounts ma ON ma.id = le.member_account_id
+       AND ma.organization_id = t.organization_id
      WHERE t.transaction_type = 'transfer'
-       AND le.member_account_id IN (SELECT id FROM member_accounts WHERE member_id = $1)
+       AND t.organization_id = public.current_organization_id()
+       AND le.organization_id = public.current_organization_id()
+       AND ma.organization_id = public.current_organization_id()
+       AND ma.member_id = $1
        AND le.entry_type = 'DEBIT'
        AND t.created_at >= CURRENT_DATE`,
     [senderMemberId]

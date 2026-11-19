@@ -73,9 +73,10 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    const parsedAmount = parseFloat(amount);
-    if (parsedAmount <= 0) {
-      return NextResponse.json({ success: false, error: 'Amount must be positive' }, { status: 400 });
+    const amountText = typeof amount === 'number' ? String(amount) : String(amount).trim();
+    const parsedAmount = Number(amountText);
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return NextResponse.json({ success: false, error: 'Amount must be positive and have no more than two decimal places' }, { status: 400 });
     }
 
     // Get sender + receiver member info
@@ -120,15 +121,19 @@ export async function POST(request) {
       receiverAccountId: receiver_account_id,
       amount: parsedAmount,
       description: description || `Transfer: ${senderAcct.rows[0].name} → ${receiverAcct.rows[0].name}`,
-      userId: perm.userId,
+      userId: perm.auth.userId,
     });
 
     return NextResponse.json({ success: true, data: result }, { status: 201 });
     });
   } catch (error) {
-    console.error('[Member Transfers] POST error:', error.message);
-    const status = error.message.includes('Insufficient') || error.message.includes('same account') ? 400
-      : error.message.includes('not found') ? 404 : 500;
-    return NextResponse.json({ success: false, error: error.message }, { status });
+    console.error('[Member Transfers] POST error:', error);
+    const message = error?.message || '';
+    const isBusinessError = /Insufficient balance|same account|not found|must be active|Transfers require|amount must be positive/i.test(message);
+    const status = /not found/i.test(message) ? 404 : isBusinessError ? 400 : 500;
+    return NextResponse.json({
+      success: false,
+      error: isBusinessError ? message : 'Transfer could not be completed. No transfer was posted.',
+    }, { status });
   }
 }
