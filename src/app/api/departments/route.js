@@ -33,7 +33,7 @@ export async function GET(request) {
         (SELECT COUNT(*) FROM department_documents dd
           WHERE dd.organization_id = d.organization_id AND dd.department_id = d.id) AS document_count,
         p.name AS parent_name,
-        COALESCE(hu.full_name, hu.name) AS head_name
+        hu.name AS head_name
       FROM departments d
       LEFT JOIN departments p ON d.parent_department_id = p.id AND p.organization_id = d.organization_id
       LEFT JOIN users hu ON d.head_user_id = hu.id AND hu.organization_id = d.organization_id
@@ -50,7 +50,7 @@ export async function GET(request) {
     const result = await withOrganizationRbac(auth, () => query(sql, params));
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {
-    console.error('[Departments] GET error:', { code: error.code || 'UNKNOWN', constraint: error.constraint || null });
+    console.error('[Departments] GET error:', { code: error.code || 'UNKNOWN', constraint: error.constraint || null, message: error.message });
     return NextResponse.json({ success: false, error: 'Failed to fetch departments' }, { status: 500 });
   }
 }
