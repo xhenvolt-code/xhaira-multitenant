@@ -26,7 +26,7 @@ export async function GET(request) {
               u.authority_level, u.first_login_completed, u.must_reset_password,
               u.last_login, u.created_at, u.staff_id, u.role_id,
               s.name  AS staff_name,
-              s.email AS staff_email,
+              u.email AS staff_email,
               r.name  AS role_name,
               r.hierarchy_level,
               r.authority_level AS role_authority_level

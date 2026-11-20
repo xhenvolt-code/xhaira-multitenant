@@ -9,7 +9,7 @@ export async function GET(request) {
   const { auth } = permission;
   try {
     const result = await withOrganizationRbac(auth, () => query(
-      `SELECT id, name, alias, hierarchy_level, authority_level, department_id,
+      `SELECT r.id, r.name, r.alias, r.hierarchy_level, r.authority_level, r.department_id,
               COALESCE(d.name, d.department_name) AS department_name
          FROM public.roles r
          LEFT JOIN public.departments d
