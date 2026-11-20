@@ -1,22 +1,56 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Save, User, Lock, Bell, DollarSign, Palette, ChevronRight, Landmark } from 'lucide-react';
+import { Save, User, Lock, Bell, DollarSign, Palette, ChevronRight, Landmark, Building2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { usePermissions } from '@/components/providers/PermissionProvider';
 import Link from 'next/link';
 
 export default function SettingsPage() {
   const [user, setUser] = useState(null);
   const [form, setForm] = useState({ name: '', email: '' });
+  const [organizationForm, setOrganizationForm] = useState({
+    organization_name: '',
+    contact_phones: '',
+    contact_email: '',
+    website: '',
+    address: '',
+    use_organization_name_as_app_name: false,
+  });
   const [passwordForm, setPasswordForm] = useState({ current: '', newPass: '', confirm: '' });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  const [organizationLoading, setOrganizationLoading] = useState(false);
+  const [organizationSaving, setOrganizationSaving] = useState(false);
+  const [organizationSaved, setOrganizationSaved] = useState(false);
+  const [organizationError, setOrganizationError] = useState('');
+  const { hasPermission, loading: permissionsLoading, refreshPermissions } = usePermissions();
+  const canManageOrganization = !permissionsLoading && hasPermission('settings.manage');
 
   useEffect(() => {
     fetchWithAuth('/api/auth/me').then(r => r.json()).then(j => {
       if (j.success && j.data) { setUser(j.data); setForm({ name: j.data.name || '', email: j.data.email || '' }); }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!canManageOrganization) return;
+    let active = true;
+    setOrganizationLoading(true);
+    fetchWithAuth('/api/organization/branding')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to load organization information');
+        if (active) setOrganizationForm(result.data);
+      })
+      .catch((loadError) => {
+        if (active) setOrganizationError(loadError.message || 'Unable to load organization information');
+      })
+      .finally(() => {
+        if (active) setOrganizationLoading(false);
+      });
+    return () => { active = false; };
+  }, [canManageOrganization]);
 
   const saveProfile = async () => {
     setError('');
@@ -25,6 +59,30 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) { setError(err.message); }
+  };
+
+  const saveOrganization = async (event) => {
+    event.preventDefault();
+    setOrganizationError('');
+    setOrganizationSaved(false);
+    setOrganizationSaving(true);
+    try {
+      const response = await fetchWithAuth('/api/organization/branding', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(organizationForm),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Unable to save organization information');
+      setOrganizationForm(result.data);
+      setOrganizationSaved(true);
+      await refreshPermissions();
+      setTimeout(() => setOrganizationSaved(false), 3000);
+    } catch (saveError) {
+      setOrganizationError(saveError.message || 'Unable to save organization information');
+    } finally {
+      setOrganizationSaving(false);
+    }
   };
 
   return (
@@ -58,6 +116,81 @@ export default function SettingsPage() {
           </Link>
         ))}
       </div>
+
+      {canManageOrganization && (
+        <form onSubmit={saveOrganization} className="bg-card rounded-xl border p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <Building2 className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <h2 className="font-semibold text-foreground">Organization information</h2>
+              <p className="text-xs text-muted-foreground">Used for organization-branded documents and app identity.</p>
+            </div>
+          </div>
+          {organizationLoading ? (
+            <p className="text-sm text-muted-foreground">Loading organization information...</p>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="organization-name" className="block text-sm text-muted-foreground mb-1">Organization name</label>
+                <input id="organization-name" required maxLength={255} value={organizationForm.organization_name}
+                  onChange={e => setOrganizationForm(f => ({ ...f, organization_name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="organization-phones" className="block text-sm text-muted-foreground mb-1">Telephone contacts</label>
+                  <input id="organization-phones" maxLength={500} value={organizationForm.contact_phones}
+                    onChange={e => setOrganizationForm(f => ({ ...f, contact_phones: e.target.value }))}
+                    placeholder="Separate multiple numbers with commas"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+                </div>
+                <div>
+                  <label htmlFor="organization-email" className="block text-sm text-muted-foreground mb-1">Organization email</label>
+                  <input id="organization-email" type="email" maxLength={254} value={organizationForm.contact_email}
+                    onChange={e => setOrganizationForm(f => ({ ...f, contact_email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+                </div>
+                <div>
+                  <label htmlFor="organization-website" className="block text-sm text-muted-foreground mb-1">Website</label>
+                  <input id="organization-website" type="url" maxLength={500} value={organizationForm.website}
+                    onChange={e => setOrganizationForm(f => ({ ...f, website: e.target.value }))}
+                    placeholder="https://example.org"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+                </div>
+                <div>
+                  <label htmlFor="organization-address" className="block text-sm text-muted-foreground mb-1">Address</label>
+                  <textarea id="organization-address" maxLength={1000} rows={2} value={organizationForm.address}
+                    onChange={e => setOrganizationForm(f => ({ ...f, address: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+                </div>
+              </div>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-medium text-foreground">Sidebar app name</legend>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input type="radio" name="sidebar-app-name" value="xhaira"
+                    checked={!organizationForm.use_organization_name_as_app_name}
+                    onChange={() => setOrganizationForm(f => ({ ...f, use_organization_name_as_app_name: false }))} />
+                  Use XHAIRA
+                </label>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input type="radio" name="sidebar-app-name" value="organization"
+                    checked={organizationForm.use_organization_name_as_app_name}
+                    onChange={() => setOrganizationForm(f => ({ ...f, use_organization_name_as_app_name: true }))} />
+                  Use the organization name
+                </label>
+              </fieldset>
+            </>
+          )}
+          {organizationError && <p role="alert" className="text-sm text-red-600">{organizationError}</p>}
+          <div className="flex items-center gap-3">
+            <button type="submit" disabled={organizationSaving || organizationLoading}
+              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              <Save className="w-4 h-4" /> {organizationSaving ? 'Saving...' : 'Save organization information'}
+            </button>
+            {organizationSaved && <span role="status" className="text-sm text-emerald-600">Saved</span>}
+          </div>
+        </form>
+      )}
 
       {/* Profile */}
       <div className="bg-card rounded-xl border p-5 space-y-4">

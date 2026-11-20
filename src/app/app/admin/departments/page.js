@@ -8,6 +8,7 @@ import { confirmDelete } from '@/lib/confirm';
 export default function AdminDepartmentsPage() {
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -20,10 +21,23 @@ export default function AdminDepartmentsPage() {
 
   const fetchDepartments = useCallback(async () => {
     try {
-      const res = await fetch(`/api/departments?active_only=false&search=${search}`, { credentials: 'include' });
+      const params = new URLSearchParams({ active_only: 'false', search });
+      const res = await fetch(`/api/departments?${params}`, { credentials: 'include' });
       const data = await res.json();
-      if (data.success) setDepartments(data.data);
-    } catch {} finally { setLoading(false); }
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Failed to load departments (HTTP ${res.status})`);
+      }
+      setDepartments(Array.isArray(data.data) ? data.data : []);
+      setLoadError('');
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load departments';
+      console.error('[Departments] Failed to load list:', error);
+      setLoadError(message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }, [search]);
 
   useEffect(() => { fetchDepartments(); }, [fetchDepartments]);
@@ -35,8 +49,12 @@ export default function AdminDepartmentsPage() {
     try {
       const res = await fetch(`/api/departments/${dept.id}`, { credentials: 'include' });
       const data = await res.json();
-      if (data.success) setDetail(data.data);
-    } catch {}
+      if (!res.ok || !data.success) throw new Error(data.error || `Failed to load department (HTTP ${res.status})`);
+      setDetail(data.data);
+    } catch (error) {
+      console.error('[Departments] Failed to load department details:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to load department details');
+    }
   };
 
   const createDepartment = async () => {
@@ -173,7 +191,14 @@ export default function AdminDepartmentsPage() {
               </div>
             </div>
           ))}
-          {departments.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No departments found</div>}
+          {loadError ? (
+            <div className="p-6 text-center text-sm" role="alert">
+              <p className="text-red-500">Could not load departments: {loadError}</p>
+              <button onClick={fetchDepartments} className="mt-3 text-primary underline">Retry</button>
+            </div>
+          ) : departments.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">No departments found</div>
+          ) : null}
         </div>
       </div>
 

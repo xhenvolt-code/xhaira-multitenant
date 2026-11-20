@@ -79,6 +79,10 @@ export default function Sidebar() {
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const quickAddRef = useRef(null);
   const { user: permUser, hasPermission, hasModuleAccess, hasAnyPermission, hierarchyLevel, loading: permLoading } = usePermissions();
+  const organizationBranding = permUser?.organization?.branding;
+  const sidebarAppName = organizationBranding?.use_organization_name_as_app_name
+    ? organizationBranding.organization_name || permUser?.organization?.name || 'XHAIRA'
+    : 'XHAIRA';
 
   useEffect(() => {
     if (!permUser) return;
@@ -191,7 +195,7 @@ export default function Sidebar() {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
               <span className="text-sm font-bold text-white">X</span>
             </div>
-            <span className="font-bold text-lg" style={{ color: 'var(--sidebar-text)' }}>Xhaira</span>
+            <span className="font-bold text-lg" style={{ color: 'var(--sidebar-text)' }}>{sidebarAppName}</span>
           </motion.div>
         )}
         <button

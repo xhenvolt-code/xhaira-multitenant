@@ -68,9 +68,16 @@ export async function GET(request) {
         u.created_at,
         u.organization_id,
         o.name AS organization_name,
-        o.slug AS organization_slug
+        o.slug AS organization_slug,
+        b.contact_phones AS organization_contact_phones,
+        b.contact_email AS organization_contact_email,
+        b.website AS organization_website,
+        b.address AS organization_address,
+        b.use_organization_name_as_app_name
       FROM users u
       JOIN organizations o ON o.id = u.organization_id
+      LEFT JOIN company_branding b
+        ON b.organization_id = o.id AND b.is_active = true
       WHERE u.id = $1 AND u.organization_id = $2`,
       [session.userId, session.organizationId]
     );
@@ -145,6 +152,14 @@ export async function GET(request) {
             id: user.organization_id,
             name: user.organization_name,
             slug: user.organization_slug,
+            branding: {
+              organization_name: user.organization_name,
+              contact_phones: user.organization_contact_phones || '',
+              contact_email: user.organization_contact_email || '',
+              website: user.organization_website || '',
+              address: user.organization_address || '',
+              use_organization_name_as_app_name: user.use_organization_name_as_app_name === true,
+            },
           },
           email: user.email,
           name: user.name,

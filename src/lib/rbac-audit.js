@@ -4,6 +4,7 @@
  */
 
 import { query } from './db.js';
+import { getOrganizationContext } from './organization-context.js';
 
 /**
  * Log an RBAC-related action to the dedicated rbac_audit_logs table
@@ -26,10 +27,13 @@ export async function logRbacEvent({
   userAgent = null,
 }) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to write RBAC audit events');
     await query(
-      `INSERT INTO rbac_audit_logs (user_id, action, entity_type, entity_id, details, ip_address, user_agent)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [userId, action, entityType, entityId, JSON.stringify(details), ipAddress, userAgent]
+      `INSERT INTO public.rbac_audit_logs
+         (organization_id, user_id, action, entity_type, entity_id, details, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [organizationId, userId, action, entityType, entityId, JSON.stringify(details), ipAddress, userAgent]
     );
   } catch (err) {
     // Also write to general audit_logs as fallback

@@ -3,8 +3,8 @@
  */
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
-import { verifyAuth } from '@/lib/auth-utils.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
 export async function GET(request) {
   try {
@@ -19,11 +19,12 @@ export async function GET(request) {
 
     let sql = `
       SELECT ral.*, u.name AS user_name, u.email AS user_email
-      FROM rbac_audit_logs ral
-      LEFT JOIN users u ON ral.user_id = u.id
+      FROM public.rbac_audit_logs ral
+      LEFT JOIN public.users u
+        ON ral.user_id = u.id AND u.organization_id = ral.organization_id
     `;
-    const params = [];
-    const conditions = [];
+    const params = [auth.organizationId];
+    const conditions = ['ral.organization_id = $1'];
 
     if (action) {
       conditions.push(`ral.action = $${params.length + 1}`);
@@ -37,7 +38,7 @@ export async function GET(request) {
     sql += ` ORDER BY ral.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
-    const result = await query(sql, params);
+    const result = await withOrganizationRbac(auth, () => query(sql, params));
 
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {

@@ -20,6 +20,21 @@ export async function GET(request, { params }) {
     if (!result.rows[0]) return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 });
 
     const inv = result.rows[0];
+    const organizationResult = await query(
+      `SELECT o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address
+         FROM public.organizations o
+         LEFT JOIN public.company_branding cb ON cb.organization_id = o.id AND cb.is_active = true
+        WHERE o.id = $1`, [auth.organizationId]
+    );
+    const organization = organizationResult.rows[0] || {};
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[char]);
+    const organizationName = escapeHtml(organization.organization_name || inv.company_name || 'Xhaira SACCO & Investment Management');
+    const organizationAddress = escapeHtml(organization.address || inv.company_address || '');
+    const organizationPhones = escapeHtml(organization.contact_phones || inv.company_phone || '');
+    const organizationEmail = escapeHtml(organization.contact_email || inv.company_email || '');
+    const organizationWebsite = escapeHtml(organization.website || '');
     const fmtAmount = (amount, currency = 'UGX') => {
       const n = parseFloat(amount || 0);
       return `${currency} ${n.toLocaleString()}`;
@@ -88,10 +103,10 @@ export async function GET(request, { params }) {
 
   <div class="header">
     <div class="company-info">
-      <h1>${inv.company_name || 'Xhaira SACCO & Investment Management'}</h1>
-      <p>${inv.company_address || 'Bulubandi, Iganga, Uganda'}</p>
-      <p>${inv.company_phone || ''} ${inv.company_email ? '· ' + inv.company_email : ''}</p>
-      <p>Software Development & Digital Solutions</p>
+      <h1>${organizationName}</h1>
+      ${organizationAddress ? `<p>${organizationAddress}</p>` : ''}
+      ${organizationPhones || organizationEmail ? `<p>${organizationPhones}${organizationPhones && organizationEmail ? ' · ' : ''}${organizationEmail}</p>` : ''}
+      ${organizationWebsite ? `<p>${organizationWebsite}</p>` : ''}
     </div>
     <div class="invoice-meta">
       <div class="invoice-label">INVOICE</div>

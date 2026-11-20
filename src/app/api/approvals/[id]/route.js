@@ -4,10 +4,10 @@
  */
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
-import { verifyAuth } from '@/lib/auth-utils.js';
 import { getUserHierarchyLevel } from '@/lib/permissions.js';
 import { logRbacEvent, extractRbacMetadata } from '@/lib/rbac-audit.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
 export async function GET(request, { params }) {
   try {
@@ -17,16 +17,20 @@ export async function GET(request, { params }) {
 
     const { id } = await params;
 
-    const result = await query(
-      `SELECT ar.*, 
+    const result = await withOrganizationRbac(auth, () => query(
+      `SELECT ar.*,
         u_req.name AS requester_name, u_req.email AS requester_email,
         u_app.name AS approver_name
-      FROM approval_requests ar
-      JOIN users u_req ON ar.requester_user_id = u_req.id
-      LEFT JOIN users u_app ON ar.approver_user_id = u_app.id
-      WHERE ar.id = $1`,
-      [id]
-    );
+       FROM approval_requests ar
+       JOIN users u_req
+         ON ar.requester_user_id = u_req.id
+        AND u_req.organization_id = $2
+       LEFT JOIN users u_app
+         ON ar.approver_user_id = u_app.id
+        AND u_app.organization_id = $2
+       WHERE ar.id = $1`,
+      [id, auth.organizationId]
+    ));
 
     if (!result.rows[0]) {
       return NextResponse.json({ success: false, error: 'Approval request not found' }, { status: 404 });
@@ -35,8 +39,10 @@ export async function GET(request, { params }) {
     // Only allow the requester or someone with higher authority to view
     const req = result.rows[0];
     if (req.requester_user_id !== auth.userId && auth.role !== 'superadmin') {
-      const myLevel = await getUserHierarchyLevel(auth.userId);
-      const requesterLevel = await getUserHierarchyLevel(req.requester_user_id);
+      const [myLevel, requesterLevel] = await withOrganizationRbac(auth, () => Promise.all([
+        getUserHierarchyLevel(auth.userId),
+        getUserHierarchyLevel(req.requester_user_id),
+      ]));
       if (myLevel >= requesterLevel) {
         return NextResponse.json({ success: false, error: 'Insufficient authority to view this request' }, { status: 403 });
       }
@@ -66,10 +72,15 @@ export async function PUT(request, { params }) {
     }
 
     // Fetch the request
-    const reqResult = await query(
-      'SELECT * FROM approval_requests WHERE id = $1',
-      [id]
-    );
+    const reqResult = await withOrganizationRbac(auth, () => query(
+      `SELECT ar.*
+         FROM approval_requests ar
+         JOIN users u_requester
+           ON u_requester.id = ar.requester_user_id
+          AND u_requester.organization_id = $2
+        WHERE ar.id = $1`,
+      [id, auth.organizationId]
+    ));
 
     if (!reqResult.rows[0]) {
       return NextResponse.json({ success: false, error: 'Approval request not found' }, { status: 404 });
@@ -86,10 +97,10 @@ export async function PUT(request, { params }) {
 
     // Verify authority: approver must have higher authority than requester
     if (auth.role !== 'superadmin') {
-      const [approverLevel, requesterLevel] = await Promise.all([
+      const [approverLevel, requesterLevel] = await withOrganizationRbac(auth, () => Promise.all([
         getUserHierarchyLevel(auth.userId),
         getUserHierarchyLevel(approvalReq.requester_user_id),
-      ]);
+      ]));
 
       if (approverLevel >= requesterLevel) {
         return NextResponse.json(
@@ -108,13 +119,17 @@ export async function PUT(request, { params }) {
     }
 
     // Resolve the request
-    const result = await query(
+    const result = await withOrganizationRbac(auth, () => query(
       `UPDATE approval_requests
-       SET status = $1, approver_user_id = $2, approver_notes = $3, resolved_at = NOW()
-       WHERE id = $4 AND status = 'pending'
-       RETURNING *`,
-      [status, auth.userId, notes || null, id]
-    );
+          SET status = $1, approver_user_id = $2, approver_notes = $3, resolved_at = NOW()
+        WHERE id = $4
+          AND status = 'pending'
+          AND requester_user_id IN (
+            SELECT id FROM users WHERE organization_id = $5
+          )
+        RETURNING *`,
+      [status, auth.userId, notes || null, id, auth.organizationId]
+    ));
 
     if (!result.rows[0]) {
       return NextResponse.json(
@@ -125,7 +140,7 @@ export async function PUT(request, { params }) {
 
     // Audit log
     const meta = extractRbacMetadata(request);
-    await logRbacEvent({
+    await withOrganizationRbac(auth, () => logRbacEvent({
       userId: auth.userId,
       action: `approval_request_${status}`,
       entityType: 'approval_request',
@@ -138,7 +153,7 @@ export async function PUT(request, { params }) {
         notes,
       },
       ...meta,
-    });
+    }));
 
     return NextResponse.json({ success: true, data: result.rows[0] });
   } catch (error) {

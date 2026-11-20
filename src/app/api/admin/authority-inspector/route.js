@@ -29,9 +29,9 @@ export async function GET(request) {
         u.first_login_completed,
         u.last_login,
         s.id                      AS staff_id,
-        s.position,
-        s.department,
-        s.linked_user_id,
+        to_jsonb(s)->>'position' AS position,
+        to_jsonb(s)->>'department' AS department,
+        COALESCE(to_jsonb(s)->>'linked_user_id', to_jsonb(s)->>'user_id') AS linked_user_id,
         COALESCE(
           (
             SELECT json_agg(

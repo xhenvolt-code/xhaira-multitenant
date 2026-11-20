@@ -20,18 +20,14 @@ export async function GET(request) {
         COALESCE(d.name, d.department_name) AS display_name,
         (SELECT COUNT(*) FROM staff s
           WHERE s.organization_id = d.organization_id
-            AND s.department = COALESCE(d.name, d.department_name)
-            AND s.status = 'active') AS staff_count,
+            AND (to_jsonb(s)->>'department_id' = d.id::text
+              OR to_jsonb(s)->>'department' = COALESCE(d.name, d.department_name))
+            AND COALESCE(to_jsonb(s)->>'status', 'active') = 'active') AS staff_count,
         (SELECT COUNT(*) FROM roles r
-          WHERE r.organization_id = d.organization_id AND r.department_id = d.id) AS role_count,
+          WHERE r.organization_id = d.organization_id
+            AND to_jsonb(r)->>'department_id' = d.id::text) AS role_count,
         (SELECT COUNT(*) FROM department_policies dp
           WHERE dp.organization_id = d.organization_id AND dp.department_id = d.id AND dp.is_active = true) AS policy_count,
-        (SELECT COUNT(*) FROM department_kpis dk
-          WHERE dk.organization_id = d.organization_id AND dk.department_id = d.id AND dk.is_active = true) AS kpi_count,
-        (SELECT COUNT(*) FROM department_processes dpr
-          WHERE dpr.organization_id = d.organization_id AND dpr.department_id = d.id AND dpr.status = 'active') AS process_count,
-        (SELECT COUNT(*) FROM department_documents dd
-          WHERE dd.organization_id = d.organization_id AND dd.department_id = d.id) AS document_count,
         p.name AS parent_name,
         hu.name AS head_name
       FROM departments d

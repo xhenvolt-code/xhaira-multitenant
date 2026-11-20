@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS public.roles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
+commit 
 ALTER TABLE public.roles
   ADD COLUMN IF NOT EXISTS organization_id UUID,
   ADD COLUMN IF NOT EXISTS hierarchy_level INTEGER DEFAULT 5,
