@@ -36,9 +36,11 @@ export async function POST(request) {
     }
 
     try {
-      await runWithOrganizationContext(auth.organizationId, () => query(
+      const presenceResult = await runWithOrganizationContext(auth.organizationId, () => query(
         `INSERT INTO user_presence (user_id, organization_id, last_ping, last_seen, status, is_online, current_route, current_page_title, device_info)
-         VALUES ($1, $2, NOW(), NOW(), 'online', true, $3, $4, $5)
+         SELECT u.id, u.organization_id, NOW(), NOW(), 'online', true, $3, $4, $5
+           FROM public.users u
+          WHERE u.id = $1 AND u.organization_id = $2
          ON CONFLICT (user_id) DO UPDATE
          SET last_ping          = NOW(),
              last_seen          = NOW(),
@@ -52,6 +54,9 @@ export async function POST(request) {
         [auth.userId, auth.organizationId, route, page_title, device_info]
       ));
 
+      if (presenceResult.rowCount === 0) {
+        return NextResponse.json({ ok: true, tracked: false, reason: 'organization_scope_mismatch' }, { status: 200 });
+      }
       return NextResponse.json({ ok: true, tracked: true, status: 'online' });
     } catch (err) {
       // Handle missing table gracefully
