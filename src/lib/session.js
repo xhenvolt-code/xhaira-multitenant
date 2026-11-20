@@ -145,10 +145,10 @@ export async function updateUserLastSeen(userId, organizationId) {
              last_seen_at = CURRENT_TIMESTAMP,
              is_online = true
          WHERE id = $1 AND organization_id = $2
-         RETURNING id
-       )
-       INSERT INTO user_presence (user_id, last_ping, last_seen, status, is_online, updated_at)
-       SELECT id, NOW(), NOW(), 'online', true, NOW() FROM updated_user
+         RETURNING id, organization_id
+        )
+        INSERT INTO user_presence (user_id, organization_id, last_ping, last_seen, status, is_online, updated_at)
+        SELECT id, organization_id, NOW(), NOW(), 'online', true, NOW() FROM updated_user
        ON CONFLICT (user_id) DO UPDATE
        SET last_ping = NOW(),
            last_seen = NOW(),
