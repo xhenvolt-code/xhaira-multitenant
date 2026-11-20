@@ -8,7 +8,6 @@
  * Returns 200 even for unauthenticated requests (to avoid spam 401s from browser).
  */
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/current-user';
 import { query } from '@/lib/db';
 import { verifyAuth } from '@/lib/auth-utils.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
@@ -20,11 +19,6 @@ export async function POST(request) {
     // Allow unauthenticated pings (return 200, don't spam 401)
     // Only track if authenticated
     if (!auth) {
-      return NextResponse.json({ ok: true, tracked: false }, { status: 200 });
-    }
-
-    const user = await getCurrentUser();
-    if (!user) {
       return NextResponse.json({ ok: true, tracked: false }, { status: 200 });
     }
 
@@ -43,19 +37,19 @@ export async function POST(request) {
 
     try {
       await runWithOrganizationContext(auth.organizationId, () => query(
-        `INSERT INTO user_presence (user_id, last_ping, last_seen, status, is_online, current_route, current_page_title, device_info)
-         VALUES ($1, NOW(), NOW(), 'online', true, $2, $3, $4)
+        `INSERT INTO user_presence (user_id, organization_id, last_ping, last_seen, status, is_online, current_route, current_page_title, device_info)
+         VALUES ($1, $2, NOW(), NOW(), 'online', true, $3, $4, $5)
          ON CONFLICT (user_id) DO UPDATE
          SET last_ping          = NOW(),
              last_seen          = NOW(),
              status             = 'online',
              is_online          = true,
-             current_route      = COALESCE($2, user_presence.current_route),
-             current_page_title = COALESCE($3, user_presence.current_page_title),
-             device_info        = COALESCE($4, user_presence.device_info),
+             current_route      = COALESCE($3, user_presence.current_route),
+             current_page_title = COALESCE($4, user_presence.current_page_title),
+             device_info        = COALESCE($5, user_presence.device_info),
              organization_id    = EXCLUDED.organization_id,
              updated_at         = NOW()`,
-        [user.id, route, page_title, device_info]
+        [auth.userId, auth.organizationId, route, page_title, device_info]
       ));
 
       return NextResponse.json({ ok: true, tracked: true, status: 'online' });
