@@ -15,7 +15,7 @@ export async function GET(request) {
 
     // Hierarchy filter: viewer only sees users whose authority_level <= their own
     // Superadmin always gets authority 100 (bypasses filter entirely via 1=1).
-    const viewerAuthority = auth.role === 'superadmin' ? 100 : await getUserAuthorityLevel(auth.userId);
+    const viewerAuthority = auth.role === 'superadmin' ? 100 : await withOrganizationRbac(auth, () => getUserAuthorityLevel(auth.userId));
     const { clause, params } = buildAuthorityFilter(viewerAuthority, {
       actorAuthorityCol: 'u.authority_level',
       startIdx: 1,
