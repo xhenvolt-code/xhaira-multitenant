@@ -122,7 +122,7 @@ export async function POST(request) {
 
     // Prepare user data
     const passwordHash = await hashPassword(password);
-    const created = await createUser({
+    const created = await withOrganizationRbac(auth, () => createUser({
       email,
       passwordHash,
       name,
@@ -131,7 +131,7 @@ export async function POST(request) {
       roleId: selectedRole.id,
       status: body.status || 'pending',
       mustResetPassword: true,
-    });
+    }));
 
     if (created?.error) {
       return NextResponse.json({ error: created.error }, { status: 409 });

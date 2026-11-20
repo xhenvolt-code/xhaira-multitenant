@@ -181,7 +181,7 @@ export async function POST(request) {
     newStaff = staffResult.rows[0];
 
     // Step 3: Back-link user → staff
-    await client.query('UPDATE users SET staff_id = $1 WHERE id = $2', [newStaff.id, newUser.id]);
+    await client.query('UPDATE users SET staff_id = $1 WHERE id = $2 AND organization_id = $3', [newStaff.id, newUser.id, auth.organizationId]);
 
     // Step 4: staff_roles junction entry
     await client.query(
@@ -195,10 +195,10 @@ export async function POST(request) {
     client.release();
     await logError('staff', 'create',
       'Atomic staff+user creation failed (transaction rolled back)',
-      { error: txError.message, name, email: cleanEmail },
+      { code: txError.code || 'UNKNOWN', constraint: txError.constraint || null },
       auth.userId
     );
-    console.error('[Staff] POST transaction error:', txError);
+    console.error('[Staff] POST transaction failed:', { code: txError.code || 'UNKNOWN', constraint: txError.constraint || null });
     if (txError.code === '23505') {
       const detail = txError.detail || '';
       if (detail.includes('username')) return NextResponse.json({ success: false, error: 'Username is already taken.' }, { status: 409 });

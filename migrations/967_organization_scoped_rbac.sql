@@ -135,8 +135,9 @@ BEGIN
   END LOOP;
 END $$;
 
-INSERT INTO public.permissions (module, action, description)
-VALUES
+INSERT INTO public.permissions (module, action, description, name)
+SELECT seed.module, seed.action, seed.description, seed.module || '_' || seed.action
+  FROM (VALUES
   ('dashboard', 'view', 'View the main dashboard'),
   ('users', 'view', 'View user accounts'),
   ('users', 'create', 'Create user accounts'),
@@ -162,6 +163,7 @@ VALUES
   ('departments', 'manage', 'Manage departments'),
   ('approvals', 'view', 'View approval requests'),
   ('approvals', 'manage', 'Manage approval requests')
+) AS seed(module, action, description)
 ON CONFLICT (module, action) DO NOTHING;
 
 UPDATE public.permissions

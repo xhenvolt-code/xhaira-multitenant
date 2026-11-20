@@ -132,7 +132,7 @@ export async function POST(request) {
     const passwordHash = await hashPassword(password);
 
     // Create user with specified role
-    const user = await createUser({
+    const user = await withOrganizationRbac(auth, () => createUser({
       email,
       passwordHash,
       name,
@@ -141,7 +141,7 @@ export async function POST(request) {
       roleId: selectedRole.id,
       status: 'active', // Admin-created users are immediately active
       mustResetPassword: true,
-    });
+    }));
 
     if (user?.error) {
       return NextResponse.json({ error: user.error }, { status: 409 });
