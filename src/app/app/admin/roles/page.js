@@ -60,14 +60,11 @@ export default function AdminRolesPage() {
       const rolesData = await rolesRes.json();
       const permsData = await permsRes.json();
       const deptsData = await deptsRes.json();
-      if (!rolesRes.ok || !rolesData.success) throw new Error(rolesData.error || 'Failed to load roles');
-      if (!permsRes.ok || !permsData.success) throw new Error(permsData.error || 'Failed to load permissions');
-      setRoles(rolesData.data || []);
-      setPermissions({ flat: permsData.data || [], grouped: permsData.grouped || {} });
-      if (deptsData.success) setDepartments(deptsData.data || []);
+      if (rolesData.success) setRoles(rolesData.data);
+      if (permsData.success) setPermissions({ flat: permsData.data, grouped: permsData.grouped });
+      if (deptsData.success) setDepartments(deptsData.data);
     } catch (err) {
       console.error('Failed to fetch roles/permissions:', err);
-      toast.error(err.message || 'Failed to load roles and permissions');
     } finally {
       setLoading(false);
     }
@@ -83,11 +80,11 @@ export default function AdminRolesPage() {
     try {
       const res = await fetchWithAuth(`/api/admin/roles/${role.id}`);
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load role permissions');
-      setRolePermissions(data.data.permissions.map((p) => p.id));
+      if (data.success) {
+        setRolePermissions(data.data.permissions.map((p) => p.id));
+      }
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to load role permissions');
     }
   };
 
@@ -95,7 +92,7 @@ export default function AdminRolesPage() {
     if (!selectedRole) return;
     setSaving(true);
     try {
-      const res = await fetchWithAuth(`/api/admin/roles/${selectedRole.id}`, {
+      await fetchWithAuth(`/api/admin/roles/${selectedRole.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -106,13 +103,9 @@ export default function AdminRolesPage() {
           alias: editAlias || null,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update role');
-      toast.success('Role updated');
       fetchData();
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to update role');
     } finally {
       setSaving(false);
     }
@@ -136,20 +129,19 @@ export default function AdminRolesPage() {
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create role');
-      setShowCreate(false);
-      setNewRoleName('');
-      setNewRoleDescription('');
-      setNewRoleHierarchy(4);
-      setNewRolePerms([]);
-      setNewRoleDepartment('');
-      setNewRoleAlias('');
-      setNewRoleAuthority(20);
-      toast.success('Role created');
-      fetchData();
+      if (data.success) {
+        setShowCreate(false);
+        setNewRoleName('');
+        setNewRoleDescription('');
+        setNewRoleHierarchy(4);
+        setNewRolePerms([]);
+        setNewRoleDepartment('');
+        setNewRoleAlias('');
+        setNewRoleAuthority(20);
+        fetchData();
+      }
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to create role');
     } finally {
       setSaving(false);
     }
@@ -168,7 +160,6 @@ export default function AdminRolesPage() {
       fetchData();
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to delete role');
     }
   };
 

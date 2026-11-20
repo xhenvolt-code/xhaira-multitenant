@@ -25,13 +25,11 @@ export async function GET(request) {
       `SELECT u.id, u.email, u.username, u.name, u.role, u.status, u.is_active,
               u.authority_level, u.first_login_completed, u.must_reset_password,
               u.last_login, u.created_at, u.staff_id, u.role_id,
-              s.name  AS staff_name,
               u.email AS staff_email,
               r.name  AS role_name,
               r.hierarchy_level,
               r.authority_level AS role_authority_level
          FROM users u
-         LEFT JOIN staff  s ON u.staff_id = s.id AND s.organization_id = u.organization_id
          LEFT JOIN roles  r ON r.id = u.role_id AND r.organization_id = u.organization_id
         WHERE ${clause} AND u.organization_id = $${params.length + 1}
         ORDER BY u.created_at DESC`,

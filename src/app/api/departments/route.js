@@ -20,7 +20,7 @@ export async function GET(request) {
         COALESCE(d.name, d.department_name) AS display_name,
         (SELECT COUNT(*) FROM staff s
           WHERE s.organization_id = d.organization_id
-            AND (s.department_id = d.id OR s.department = COALESCE(d.name, d.department_name))
+            AND s.department = COALESCE(d.name, d.department_name)
             AND s.status = 'active') AS staff_count,
         (SELECT COUNT(*) FROM roles r
           WHERE r.organization_id = d.organization_id AND r.department_id = d.id) AS role_count,
