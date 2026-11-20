@@ -15,18 +15,19 @@ import { getAllValidRoutes } from '@/lib/navigation-config.js';
 export async function GET(request, { params }) {
   const perm = await requirePermission(request, 'roles.manage');
   if (perm instanceof NextResponse) return perm;
+  const { auth } = perm;
 
   const { userId } = await params;
 
   try {
     // User info
     const userResult = await query(
-      `SELECT u.id, u.email, u.name, u.role, u.status, u.is_active, u.created_at,
+      `SELECT u.id, u.email, u.name, u.role, u.role_id, u.status, u.is_active, u.created_at,
               s.first_name, s.last_name, s.position, s.department_id
        FROM users u
-       LEFT JOIN staff s ON u.staff_id = s.id
-       WHERE u.id = $1`,
-      [userId]
+       LEFT JOIN staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, auth.organizationId]
     );
 
     if (userResult.rows.length === 0) {
@@ -41,12 +42,12 @@ export async function GET(request, { params }) {
       `SELECT r.id, r.name, r.description, r.hierarchy_level, r.authority_level,
               COALESCE(r.data_scope, 'GLOBAL') as data_scope
        FROM users u
-       JOIN staff s ON u.staff_id = s.id
-       JOIN staff_roles sr ON sr.staff_id = s.id
-       JOIN roles r ON sr.role_id = r.id
-       WHERE u.id = $1
+       JOIN staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       JOIN staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = s.organization_id
+       JOIN roles r ON sr.role_id = r.id AND r.organization_id = sr.organization_id
+       WHERE u.id = $1 AND u.organization_id = $2
        ORDER BY r.hierarchy_level ASC`,
-      [userId]
+      [userId, auth.organizationId]
     );
     const roles = rolesResult.rows;
 
@@ -56,8 +57,8 @@ export async function GET(request, { params }) {
       const fb = await query(
         `SELECT r.id, r.name, r.description, r.hierarchy_level, r.authority_level,
                 COALESCE(r.data_scope, 'GLOBAL') as data_scope
-         FROM roles r WHERE r.name = $1`,
-        [user.role]
+         FROM roles r WHERE r.organization_id = $2 AND (r.id = $1 OR (r.name = $3 AND $1 IS NULL))`,
+        [user.role_id, auth.organizationId, user.role]
       );
       fallbackRoles = fb.rows;
     }

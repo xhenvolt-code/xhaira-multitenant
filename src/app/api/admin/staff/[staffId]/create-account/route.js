@@ -1,182 +1,156 @@
 /**
- * POST /api/admin/staff/[staffId]/create-account
- *
- * Creates a linked user account for an existing staff member who has none yet.
- * Admin/superadmin sets a temporary password; the user must change it on first login.
- *
- * Body: { username, password (temporary), email? }
- * Returns: { success, user: { id, email, username } }
+ * Create a linked user account for an existing organization staff member.
  */
-
 import { NextResponse } from 'next/server';
-import { query } from '@/lib/db.js';
-import { requirePermission, assertAuthorityOver } from '@/lib/permissions.js';
+import { getPool } from '@/lib/db.js';
+import { requirePermission, assertAuthorityOver, invalidateAllPermissionCaches } from '@/lib/permissions.js';
 import { hashPassword } from '@/lib/auth.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
 export async function POST(request, { params }) {
-  const perm = await requirePermission(request, 'staff.create');
-  if (perm instanceof NextResponse) return perm;
-  const { auth } = perm;
-
+  const permission = await requirePermission(request, 'staff.create');
+  if (permission instanceof NextResponse) return permission;
+  const { auth } = permission;
   const { staffId } = await params;
+  let body;
+  try { body = await request.json(); } catch {
+    return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 });
+  }
 
+  const { username, password, email: bodyEmail } = body;
+  if (typeof username !== 'string' || username.trim().length < 3) {
+    return NextResponse.json({ success: false, error: 'username must be at least 3 characters' }, { status: 400 });
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    return NextResponse.json({ success: false, error: 'Temporary password must be at least 8 characters' }, { status: 400 });
+  }
+
+  const client = await withOrganizationRbac(auth, () => getPool().connect());
   try {
-    // --- 1. Load the staff record -------------------------------------------
-    const staffResult = await query(
-      `SELECT s.*, r.authority_level AS role_authority_level, r.id AS role_id_from_role
-         FROM staff s
-         LEFT JOIN roles r ON s.role_id = r.id
-        WHERE s.id = $1`,
-      [staffId]
+    await client.query('BEGIN');
+    const staffResult = await client.query(
+      `SELECT s.*, COALESCE(s.linked_user_id, s.user_id) AS existing_user_id
+         FROM public.staff s
+        WHERE s.id = $1 AND s.organization_id = $2
+        FOR UPDATE`,
+      [staffId, auth.organizationId]
     );
-    if (staffResult.rows.length === 0) {
+    if (!staffResult.rows[0]) {
+      await client.query('ROLLBACK');
       return NextResponse.json({ success: false, error: 'Staff member not found' }, { status: 404 });
     }
     const staff = staffResult.rows[0];
-
-    // --- 2. Check that the acting user has authority >= staff's role ---------
-    const block = await assertAuthorityOver(auth, staff.role_authority_level ?? 0);
-    if (block) return block;
-
-    // --- 3. Check no user account is already linked --------------------------
-    // Check both linked_user_id (canonical) and users.staff_id (bi-directional)
-    if (staff.linked_user_id) {
-      return NextResponse.json(
-        { success: false, error: 'This staff member already has a linked user account.' },
-        { status: 409 }
-      );
+    if (staff.existing_user_id) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'This staff member already has a linked user account' }, { status: 409 });
     }
 
-    // Belt-and-suspenders: check via users table
-    const existingLink = await query(
-      'SELECT id FROM users WHERE staff_id = $1',
-      [staffId]
-    );
-    if (existingLink.rows.length > 0) {
-      // Repair the link pointer and return the existing user
-      await query(
-        'UPDATE staff SET linked_user_id = $1, user_id = $1 WHERE id = $2',
-        [existingLink.rows[0].id, staffId]
-      );
-      return NextResponse.json(
-        { success: false, error: 'Staff already has a linked user account (link now repaired).' },
-        { status: 409 }
-      );
-    }
-
-    // --- 4. Parse and validate body -----------------------------------------
-    const body = await request.json();
-    const { username, password, email: bodyEmail } = body;
-
-    const email = bodyEmail || staff.email;
+    const email = String(bodyEmail || staff.email || '').trim().toLowerCase();
     if (!email) {
-      return NextResponse.json(
-        { success: false, error: 'email is required (set on staff or provide in body)' },
-        { status: 400 }
-      );
-    }
-    if (!username || typeof username !== 'string' || username.trim().length < 3) {
-      return NextResponse.json(
-        { success: false, error: 'username must be at least 3 characters' },
-        { status: 400 }
-      );
-    }
-    if (!password || typeof password !== 'string' || password.length < 8) {
-      return NextResponse.json(
-        { success: false, error: 'Temporary password must be at least 8 characters' },
-        { status: 400 }
-      );
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'An email address is required' }, { status: 400 });
     }
 
-    // --- 5. Uniqueness checks ------------------------------------------------
-    const emailCheck = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (emailCheck.rows.length > 0) {
-      return NextResponse.json(
-        { success: false, error: 'A user account with this email already exists.' },
-        { status: 409 }
-      );
-    }
-    const usernameCheck = await query('SELECT id FROM users WHERE username = $1', [username.trim()]);
-    if (usernameCheck.rows.length > 0) {
-      return NextResponse.json(
-        { success: false, error: 'Username is already taken.' },
-        { status: 409 }
-      );
-    }
-
-    // --- 6. Determine the role to assign ------------------------------------
-    // Use the staff's primary role_id; fall back to the first staff_role
     let roleId = staff.role_id;
     if (!roleId) {
-      const staffRoleRes = await query(
-        `SELECT sr.role_id FROM staff_roles sr WHERE sr.staff_id = $1 ORDER BY sr.assigned_at LIMIT 1`,
-        [staffId]
+      const staffRole = await client.query(
+        `SELECT role_id FROM public.staff_roles
+          WHERE staff_id = $1 AND organization_id = $2
+          ORDER BY assigned_at LIMIT 1`,
+        [staffId, auth.organizationId]
       );
-      roleId = staffRoleRes.rows[0]?.role_id ?? null;
+      roleId = staffRole.rows[0]?.role_id || null;
+    }
+    if (!roleId) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Assign an organization role to this staff member before creating an account' }, { status: 400 });
     }
 
-    // Derive authority_level from role
-    let authorityLevel = 10;
-    if (roleId) {
-      const roleRes = await query('SELECT authority_level FROM roles WHERE id = $1', [roleId]);
-      authorityLevel = roleRes.rows[0]?.authority_level ?? 10;
+    const roleResult = await client.query(
+      `SELECT id, name, authority_level
+         FROM public.roles
+        WHERE id = $1 AND organization_id = $2 AND is_active = true`,
+      [roleId, auth.organizationId]
+    );
+    if (!roleResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'The staff role is unavailable in this organization' }, { status: 400 });
+    }
+    const role = roleResult.rows[0];
+    if (role.name === 'superadmin') {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'A new organization superadmin can only be created through organization registration' }, { status: 403 });
+    }
+    if (role.name === 'admin' && auth.role !== 'superadmin') {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Only the organization superadmin can create administrators' }, { status: 403 });
+    }
+    const authorityBlock = await assertAuthorityOver(auth, role.authority_level ?? 0);
+    if (authorityBlock) {
+      await client.query('ROLLBACK');
+      return authorityBlock;
     }
 
-    // --- 7. Create the user account -----------------------------------------
+    const [emailCheck, usernameCheck] = await Promise.all([
+      client.query('SELECT id FROM public.users WHERE LOWER(email) = $1 AND organization_id = $2', [email, auth.organizationId]),
+      client.query('SELECT id FROM public.users WHERE LOWER(username) = $1 AND organization_id = $2', [username.trim().toLowerCase(), auth.organizationId]),
+    ]);
+    if (emailCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'A user account with this email already exists' }, { status: 409 });
+    }
+    if (usernameCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Username is already taken' }, { status: 409 });
+    }
+
     const passwordHash = await hashPassword(password);
-
-    // Determine the role name from roleId (fall back to 'user')
-    let roleName = 'user';
-    if (roleId) {
-      const rn = await query('SELECT name FROM roles WHERE id = $1', [roleId]);
-      roleName = rn.rows[0]?.name ?? 'user';
-    }
-
-    if (roleName === 'superadmin') {
-      return NextResponse.json({ success: false, error: 'A new organization superadmin can only be created through organization registration.' }, { status: 403 });
-    }
-    if (roleName === 'admin' && auth.role !== 'superadmin') {
-      return NextResponse.json({ success: false, error: 'Only the organization superadmin can create administrators.' }, { status: 403 });
-    }
-
-    const insertResult = await query(
-      `INSERT INTO users
-         (email, username, name, password_hash, role, staff_id,
-          status, is_active, must_reset_password, first_login_completed, authority_level)
-       VALUES ($1, $2, $3, $4, $5, $6,
-               'active', true, true, false, $7)
-       RETURNING id, email, username, name, authority_level`,
+    const userResult = await client.query(
+      `INSERT INTO public.users
+         (email, username, name, password_hash, role, role_id, staff_id, organization_id,
+          status, is_active, must_reset_password, first_login_completed, authority_level,
+          created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', true, true, false, $9, NOW(), NOW())
+       RETURNING id, email, username, name, role, authority_level`,
       [
-        email.toLowerCase(),
-        username.trim(),
-        staff.name,
+        email,
+        username.trim().toLowerCase(),
+        staff.name || staff.full_name || email.split('@')[0],
         passwordHash,
-        roleName,
+        'user',
+        role.id,
         staffId,
-        authorityLevel,
+        auth.organizationId,
+        role.authority_level ?? 10,
       ]
     );
-    const newUser = insertResult.rows[0];
+    const user = userResult.rows[0];
 
-    // --- 8. Link the user back to the staff record (both columns) -----------
-    await query(
-      'UPDATE staff SET linked_user_id = $1, user_id = $1 WHERE id = $2',
-      [newUser.id, staffId]
+    await client.query(
+      `UPDATE public.staff
+          SET linked_user_id = $1, user_id = $1, role_id = $2, updated_at = NOW()
+        WHERE id = $3 AND organization_id = $4`,
+      [user.id, role.id, staffId, auth.organizationId]
     );
-
-    // --- 9. Ensure staff_roles entry exists for the role --------------------
-    if (roleId) {
-      await query(
-        `INSERT INTO staff_roles (staff_id, role_id)
-         VALUES ($1, $2)
-         ON CONFLICT (staff_id, role_id) DO NOTHING`,
-        [staffId, roleId]
-      );
-    }
-
-    return NextResponse.json({ success: true, user: newUser }, { status: 201 });
+    await client.query(
+      `INSERT INTO public.staff_roles (staff_id, role_id, assigned_by, organization_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (staff_id, role_id) DO NOTHING`,
+      [staffId, role.id, auth.userId, auth.organizationId]
+    );
+    await client.query('COMMIT');
+    invalidateAllPermissionCaches();
+    return NextResponse.json({ success: true, user }, { status: 201 });
   } catch (error) {
-    console.error('[create-account] Error:', error);
+    try { await client.query('ROLLBACK'); } catch (rollbackError) {
+      console.error('Failed to roll back staff account creation:', rollbackError);
+    }
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'Email or username is already in use' }, { status: 409 });
+    }
+    console.error('[create-account] Organization staff account creation failed:', error);
     return NextResponse.json({ success: false, error: 'Failed to create account' }, { status: 500 });
+  } finally {
+    client.release();
   }
 }

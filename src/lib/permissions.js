@@ -18,6 +18,7 @@
 
 import { query } from './db.js';
 import { verifyAuth } from './auth-utils.js';
+import { getOrganizationContext } from './organization-context.js';
 import { NextResponse } from 'next/server';
 
 // ============================================================================
@@ -33,7 +34,9 @@ const permissionCache = new Map();
  * Get cached permissions for a user, or load from DB and cache
  */
 async function getCachedPermissions(userId) {
-  const cached = permissionCache.get(userId);
+  const organizationId = getOrganizationContext();
+  const cacheKey = `${organizationId || 'unscoped'}:${userId}`;
+  const cached = permissionCache.get(cacheKey);
   if (cached && cached.expiry > Date.now()) {
     return cached;
   }
@@ -46,7 +49,7 @@ async function getCachedPermissions(userId) {
     getUserDepartmentId(userId),
   ]);
   const entry = { permissions, hierarchyLevel, authorityLevel, dataScope, departmentId, expiry: Date.now() + CACHE_TTL_MS };
-  permissionCache.set(userId, entry);
+  permissionCache.set(cacheKey, entry);
   return entry;
 }
 
@@ -55,7 +58,7 @@ async function getCachedPermissions(userId) {
  */
 export function invalidatePermissionCache(userId) {
   if (userId) {
-    permissionCache.delete(userId);
+    permissionCache.delete(`${getOrganizationContext() || 'unscoped'}:${userId}`);
   }
 }
 
@@ -78,39 +81,38 @@ export function invalidateAllPermissionCaches() {
  *   (used when the user has no linked staff record yet, e.g. orphan users)
  */
 async function loadUserPermissionsFromDB(userId) {
-  try {
-    // Primary: full normalized chain
-    const result = await query(
-      `SELECT DISTINCT p.module, p.action
-       FROM users u
-       JOIN staff s ON u.staff_id = s.id
-       JOIN staff_roles sr ON sr.staff_id = s.id
-       JOIN role_permissions rp ON sr.role_id = rp.role_id
-       JOIN permissions p ON rp.permission_id = p.id
-       WHERE u.id = $1
-       ORDER BY p.module, p.action`,
-      [userId]
-    );
-    if (result.rows.length > 0) {
-      return result.rows.map(r => `${r.module}.${r.action}`);
-    }
+  const organizationId = getOrganizationContext();
+  if (!organizationId) throw new Error('Organization context is required to load permissions');
 
-    // Fallback: derive from users.role text field when staff link is missing
-    const fallback = await query(
+  const result = await query(
       `SELECT DISTINCT p.module, p.action
-       FROM users u
-       JOIN roles r ON u.role = r.name
-       JOIN role_permissions rp ON rp.role_id = r.id
-       JOIN permissions p ON rp.permission_id = p.id
-       WHERE u.id = $1
+       FROM public.users u
+       JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = $2
+       JOIN public.staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = $2
+       JOIN public.roles r ON sr.role_id = r.id AND r.organization_id = $2 AND r.is_active = true
+       JOIN public.role_permissions rp ON rp.role_id = r.id AND rp.organization_id = $2
+       JOIN public.permissions p ON rp.permission_id = p.id
+       WHERE u.id = $1 AND u.organization_id = $2
        ORDER BY p.module, p.action`,
-      [userId]
-    );
-    return fallback.rows.map(r => `${r.module}.${r.action}`);
-  } catch (error) {
-    console.error('[RBAC] loadUserPermissionsFromDB failed:', error.message);
-    return [];
+      [userId, organizationId]
+  );
+  if (result.rows.length > 0) {
+    return result.rows.map(r => `${r.module}.${r.action}`);
   }
+
+  const fallback = await query(
+      `SELECT DISTINCT p.module, p.action
+       FROM public.users u
+       JOIN public.roles r
+         ON r.organization_id = u.organization_id AND r.is_active = true
+        AND (r.id = u.role_id OR (u.role_id IS NULL AND r.name = u.role))
+       JOIN public.role_permissions rp ON rp.role_id = r.id AND rp.organization_id = u.organization_id
+       JOIN public.permissions p ON rp.permission_id = p.id
+       WHERE u.id = $1 AND u.organization_id = $2
+       ORDER BY p.module, p.action`,
+      [userId, organizationId]
+  );
+  return fallback.rows.map(r => `${r.module}.${r.action}`);
 }
 
 /**
@@ -123,46 +125,34 @@ async function loadUserPermissionsFromDB(userId) {
  */
 export async function hasPermission(userId, module, action, userRole) {
   if (userRole === 'superadmin') return true;
-  try {
-    const { permissions } = await getCachedPermissions(userId);
-    return permissions.includes(`${module}.${action}`);
-  } catch (error) {
-    console.error('[RBAC] hasPermission failed:', error.message);
-    return false;
-  }
+  const { permissions } = await getCachedPermissions(userId);
+  return permissions.includes(`${module}.${action}`);
 }
 
 /**
  * Get all permissions for a user (cached)
  */
 export async function getUserPermissions(userId) {
-  try {
-    const { permissions } = await getCachedPermissions(userId);
-    return permissions;
-  } catch (error) {
-    console.error('[RBAC] getUserPermissions failed:', error.message);
-    return [];
-  }
+  const { permissions } = await getCachedPermissions(userId);
+  return permissions;
 }
 
 /**
  * Get all permissions for a role from DB
  */
 export async function getRolePermissionsFromDB(roleId) {
-  try {
-    const result = await query(
-      `SELECT p.id, p.module, p.action, p.description
-       FROM role_permissions rp
-       JOIN permissions p ON rp.permission_id = p.id
-       WHERE rp.role_id = $1
-       ORDER BY p.module, p.action`,
-      [roleId]
-    );
-    return result.rows;
-  } catch (error) {
-    console.error('[RBAC] getRolePermissionsFromDB failed:', error.message);
-    return [];
-  }
+  const organizationId = getOrganizationContext();
+  if (!organizationId) throw new Error('Organization context is required to load role permissions');
+  const result = await query(
+    `SELECT p.id, p.module, p.action, p.description
+       FROM public.role_permissions rp
+       JOIN public.roles r ON r.id = rp.role_id AND r.organization_id = rp.organization_id AND r.is_active = true
+       JOIN public.permissions p ON rp.permission_id = p.id
+      WHERE rp.role_id = $1 AND rp.organization_id = $2
+      ORDER BY p.module, p.action`,
+    [roleId, organizationId]
+  );
+  return result.rows;
 }
 
 // ============================================================================
@@ -179,14 +169,16 @@ export async function getRolePermissionsFromDB(roleId) {
  */
 export async function getUserDataScope(userId) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to resolve data scope');
     const result = await query(
       `SELECT r.data_scope
-       FROM users u
-       JOIN staff s ON u.staff_id = s.id
-       JOIN staff_roles sr ON sr.staff_id = s.id
-       JOIN roles r ON sr.role_id = r.id
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u
+       JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       JOIN public.staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = s.organization_id
+       JOIN public.roles r ON sr.role_id = r.id AND r.organization_id = sr.organization_id AND r.is_active = true
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     if (result.rows.length > 0) {
       const scopes = result.rows.map(r => r.data_scope).filter(Boolean);
@@ -197,10 +189,12 @@ export async function getUserDataScope(userId) {
     // Fallback: via users.role text
     const fallback = await query(
       `SELECT r.data_scope
-       FROM users u
-       JOIN roles r ON u.role = r.name
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u
+       JOIN public.roles r
+         ON r.organization_id = u.organization_id AND r.is_active = true
+        AND (r.id = u.role_id OR (u.role_id IS NULL AND r.name = u.role))
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     if (fallback.rows.length > 0) {
       const scopes = fallback.rows.map(r => r.data_scope).filter(Boolean);
@@ -223,9 +217,13 @@ export async function getUserDataScope(userId) {
  */
 export async function getUserDepartmentId(userId) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to resolve the user department');
     const result = await query(
-      `SELECT s.department_id FROM users u JOIN staff s ON u.staff_id = s.id WHERE u.id = $1`,
-      [userId]
+      `SELECT s.department_id FROM public.users u
+        JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     return result.rows[0]?.department_id ?? null;
   } catch {
@@ -300,14 +298,16 @@ export async function getUserScopeInfo(userId) {
  */
 export async function getUserHierarchyLevel(userId) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to resolve user hierarchy');
     const result = await query(
       `SELECT MIN(r.hierarchy_level) AS hierarchy_level
-       FROM users u
-       JOIN staff s ON u.staff_id = s.id
-       JOIN staff_roles sr ON sr.staff_id = s.id
-       JOIN roles r ON sr.role_id = r.id
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u
+       JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       JOIN public.staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = s.organization_id
+       JOIN public.roles r ON sr.role_id = r.id AND r.organization_id = sr.organization_id AND r.is_active = true
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     if (result.rows[0]?.hierarchy_level != null) {
       return result.rows[0].hierarchy_level;
@@ -315,56 +315,53 @@ export async function getUserHierarchyLevel(userId) {
     // Fallback: use users.role text
     const fallback = await query(
       `SELECT MIN(r.hierarchy_level) AS hierarchy_level
-       FROM users u JOIN roles r ON u.role = r.name
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u JOIN public.roles r
+         ON r.organization_id = u.organization_id AND r.is_active = true
+        AND (r.id = u.role_id OR (u.role_id IS NULL AND r.name = u.role))
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
-    return fallback.rows[0]?.hierarchy_level ?? 5;
+    return fallback.rows[0]?.hierarchy_level ?? 100;
   } catch (error) {
     console.error('[RBAC] getUserHierarchyLevel failed:', error.message);
-    return 5;
+    throw error;
   }
 }
 
 /**
  * Get the effective authority level for a user (higher number = more authority).
  * Primary: via staff → staff_roles → roles chain.
- * Fallback A: use denormalized users.authority_level (fast path).
- * Fallback B: derive from users.role text → roles.
+ * Fallback: derive from users.role text → organization role.
  */
 export async function getUserAuthorityLevel(userId) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to resolve user authority');
     const result = await query(
       `SELECT MAX(r.authority_level) AS authority_level
-       FROM users u
-       JOIN staff s ON u.staff_id = s.id
-       JOIN staff_roles sr ON sr.staff_id = s.id
-       JOIN roles r ON sr.role_id = r.id
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u
+       JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+       JOIN public.staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = s.organization_id
+       JOIN public.roles r ON sr.role_id = r.id AND r.organization_id = sr.organization_id AND r.is_active = true
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     if (result.rows[0]?.authority_level != null) {
       return result.rows[0].authority_level;
     }
-    // Fallback A: denormalized column
-    const fast = await query(
-      `SELECT authority_level FROM users WHERE id = $1`,
-      [userId]
-    );
-    if (fast.rows[0]?.authority_level != null && fast.rows[0].authority_level > 10) {
-      return fast.rows[0].authority_level;
-    }
-    // Fallback B: derive from users.role text
+    // Fallback: derive from users.role text when no staff role is assigned.
     const fallback = await query(
       `SELECT MAX(r.authority_level) AS authority_level
-       FROM users u JOIN roles r ON u.role = r.name
-       WHERE u.id = $1`,
-      [userId]
+       FROM public.users u JOIN public.roles r
+         ON r.organization_id = u.organization_id AND r.is_active = true
+        AND (r.id = u.role_id OR (u.role_id IS NULL AND r.name = u.role))
+       WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, organizationId]
     );
     return fallback.rows[0]?.authority_level ?? 10;
   } catch (error) {
     console.error('[RBAC] getUserAuthorityLevel failed:', error.message);
-    return 10;
+    throw error;
   }
 }
 
@@ -460,31 +457,35 @@ export async function resolveApprovalRequest(requestId, approverUserId, status, 
  */
 export async function getPendingApprovalsForUser(userId) {
   try {
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to load pending approvals');
     const hierarchyLevel = await getUserHierarchyLevel(userId);
     const result = await query(
       `SELECT ar.*, 
               u.name AS requester_name, u.email AS requester_email
        FROM approval_requests ar
-       JOIN users u ON ar.requester_user_id = u.id
-       WHERE ar.status = 'pending'
+       JOIN users u ON ar.requester_user_id = u.id AND u.organization_id = ar.organization_id
+       WHERE ar.organization_id = $2
+         AND ar.status = 'pending'
          AND (
            -- User can approve if they have higher authority than requester
            $1 <= (
              SELECT COALESCE(MIN(r.hierarchy_level), 5)
              FROM users u2
-             JOIN staff s2 ON u2.staff_id = s2.id
-             JOIN staff_roles sr2 ON sr2.staff_id = s2.id
-             JOIN roles r ON sr2.role_id = r.id
-             WHERE u2.id = ar.requester_user_id
+             JOIN staff s2 ON u2.staff_id = s2.id AND s2.organization_id = u2.organization_id
+             JOIN staff_roles sr2 ON sr2.staff_id = s2.id AND sr2.organization_id = s2.organization_id
+             JOIN roles r ON sr2.role_id = r.id AND r.organization_id = sr2.organization_id
+                          AND r.is_active = true
+             WHERE u2.id = ar.requester_user_id AND u2.organization_id = ar.organization_id
            )
          )
        ORDER BY ar.created_at DESC`,
-      [hierarchyLevel]
+      [hierarchyLevel, organizationId]
     );
     return result.rows;
   } catch (error) {
     console.error('[RBAC] getPendingApprovalsForUser failed:', error.message);
-    return [];
+    throw error;
   }
 }
 
@@ -534,10 +535,20 @@ export async function requirePermission(request, moduleOrPermission, action) {
     return { auth, dataScope: 'GLOBAL', departmentId: null };
   }
 
-  const [allowed, scopeInfo] = await Promise.all([
-    hasPermission(auth.userId, module, act, auth.role),
-    getUserScopeInfo(auth.userId),
-  ]);
+  let allowed;
+  let scopeInfo;
+  try {
+    [allowed, scopeInfo] = await Promise.all([
+      hasPermission(auth.userId, module, act, auth.role),
+      getUserScopeInfo(auth.userId),
+    ]);
+  } catch (error) {
+    console.error('[RBAC] Permission verification failed:', error.message);
+    return NextResponse.json(
+      { error: 'Authorization could not be verified. Contact an organization administrator.' },
+      { status: 500 }
+    );
+  }
   if (!allowed) {
     return NextResponse.json(
       { error: `Access denied. Required permission: ${module}.${act}` },
@@ -595,16 +606,24 @@ export async function requirePermissionWithHierarchy(request, module, action, re
  */
 export async function assignRole(userId, roleName, assignedBy = null) {
   try {
-    const roleResult = await query('SELECT id FROM roles WHERE name = $1', [roleName]);
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to assign a role');
+    const roleResult = await query(
+      'SELECT id FROM public.roles WHERE name = $1 AND organization_id = $2 AND is_active = true',
+      [roleName, organizationId]
+    );
     if (!roleResult.rows[0]) throw new Error(`Role '${roleName}' not found`);
-    const staffResult = await query('SELECT staff_id FROM users WHERE id = $1', [userId]);
+    const staffResult = await query(
+      'SELECT staff_id FROM public.users WHERE id = $1 AND organization_id = $2',
+      [userId, organizationId]
+    );
     const staffId = staffResult.rows[0]?.staff_id;
     if (!staffId) throw new Error(`User has no linked staff record`);
     await query(
-      `INSERT INTO staff_roles (staff_id, role_id, assigned_by)
-       VALUES ($1, $2, $3)
+      `INSERT INTO public.staff_roles (staff_id, role_id, assigned_by, organization_id)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (staff_id, role_id) DO NOTHING`,
-      [staffId, roleResult.rows[0].id, assignedBy]
+      [staffId, roleResult.rows[0].id, assignedBy, organizationId]
     );
     invalidatePermissionCache(userId);
     return true;
@@ -619,14 +638,22 @@ export async function assignRole(userId, roleName, assignedBy = null) {
  */
 export async function removeRole(userId, roleName) {
   try {
-    const roleResult = await query('SELECT id FROM roles WHERE name = $1', [roleName]);
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to remove a role');
+    const roleResult = await query(
+      'SELECT id FROM public.roles WHERE name = $1 AND organization_id = $2',
+      [roleName, organizationId]
+    );
     if (!roleResult.rows[0]) return false;
-    const staffResult = await query('SELECT staff_id FROM users WHERE id = $1', [userId]);
+    const staffResult = await query(
+      'SELECT staff_id FROM public.users WHERE id = $1 AND organization_id = $2',
+      [userId, organizationId]
+    );
     const staffId = staffResult.rows[0]?.staff_id;
     if (!staffId) return false;
     await query(
-      'DELETE FROM staff_roles WHERE staff_id = $1 AND role_id = $2',
-      [staffId, roleResult.rows[0].id]
+      'DELETE FROM public.staff_roles WHERE staff_id = $1 AND role_id = $2 AND organization_id = $3',
+      [staffId, roleResult.rows[0].id, organizationId]
     );
     invalidatePermissionCache(userId);
     return true;
@@ -640,20 +667,15 @@ export async function removeRole(userId, roleName) {
  * Get all available permissions grouped by module
  */
 export async function getAllPermissionsGrouped() {
-  try {
-    const result = await query(
-      'SELECT id, module, action, description, route_path FROM permissions ORDER BY module, action'
-    );
-    const grouped = {};
-    for (const perm of result.rows) {
-      if (!grouped[perm.module]) grouped[perm.module] = [];
-      grouped[perm.module].push(perm);
-    }
-    return { flat: result.rows, grouped };
-  } catch (error) {
-    console.error('[RBAC] getAllPermissionsGrouped failed:', error.message);
-    return { flat: [], grouped: {} };
+  const result = await query(
+    'SELECT id, module, action, description, route_path FROM public.permissions ORDER BY module, action'
+  );
+  const grouped = {};
+  for (const perm of result.rows) {
+    if (!grouped[perm.module]) grouped[perm.module] = [];
+    grouped[perm.module].push(perm);
   }
+  return { flat: result.rows, grouped };
 }
 
 // ============================================================================

@@ -6,21 +6,28 @@
  * Used in /app/admin/users page
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 
-export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
+export function CreateUserModal({ isOpen, onClose, onUserCreated, roles = [] }) {
   const [form, setForm] = useState({
     email: '',
     name: '',
+    username: '',
     password: '',
-    role: 'staff',
+    role_id: '',
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const toast = useToast();
+
+  useEffect(() => {
+    if (!isOpen || form.role_id) return;
+    const defaultRole = roles.find((role) => role.name === 'staff') || roles.find((role) => role.name === 'user') || roles.find((role) => role.name !== 'superadmin');
+    if (defaultRole) setForm((current) => ({ ...current, role_id: defaultRole.id }));
+  }, [isOpen, form.role_id, roles]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -29,8 +36,12 @@ export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
   };
 
   const validateForm = () => {
-    if (!form.email || !form.name || !form.password) {
+    if (!form.email || !form.name || !form.username || !form.password || !form.role_id) {
       setError('All fields are required');
+      return false;
+    }
+    if (!/^[a-z0-9_]{3,100}$/i.test(form.username.trim())) {
+      setError('Username must be at least 3 characters and use only letters, numbers, or underscores');
       return false;
     }
     if (form.password.length < 8) {
@@ -61,8 +72,8 @@ export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
 
       const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.error || 'Failed to create user');
+      if (!res.ok || !data.success) {
+        setError(data.error || data.message || 'Failed to create user');
         return;
       }
 
@@ -72,8 +83,9 @@ export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
       setForm({
         email: '',
         name: '',
+        username: '',
         password: '',
-        role: 'staff',
+        role_id: '',
       });
 
       // Notify parent to refetch users
@@ -130,6 +142,22 @@ export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
 
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
+              Username
+            </label>
+            <input
+              type="text"
+              name="username"
+              value={form.username}
+              onChange={handleChange}
+              placeholder="john_doe"
+              autoComplete="username"
+              className="w-full px-3 py-2 border border-border rounded bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              disabled={loading}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1">
               Email
             </label>
             <input
@@ -163,14 +191,16 @@ export function CreateUserModal({ isOpen, onClose, onUserCreated }) {
               Role
             </label>
             <select
-              name="role"
-              value={form.role}
+              name="role_id"
+              value={form.role_id}
               onChange={handleChange}
               className="w-full px-3 py-2 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               disabled={loading}
             >
-              <option value="staff">Staff</option>
-              <option value="admin">Administrator</option>
+              <option value="">Select a role</option>
+              {roles.filter((role) => role.name !== 'superadmin').map((role) => (
+                <option key={role.id} value={role.id}>{role.alias || role.name}</option>
+              ))}
             </select>
           </div>
 

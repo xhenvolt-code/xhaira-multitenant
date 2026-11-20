@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { query, getPool } from '@/lib/db.js';
 import { verifyAuth } from '@/lib/auth-utils.js';
-import { requirePermission } from '@/lib/permissions.js';
+import { assertAuthorityOver, invalidatePermissionCache, requirePermission } from '@/lib/permissions.js';
 import { dispatch } from '@/lib/system-events.js';
 import { hashPassword } from '@/lib/auth.js';
 import { logError } from '@/lib/system-logs.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
 // GET /api/staff — staff.view
 export async function GET(request) {
@@ -30,14 +31,15 @@ export async function GET(request) {
                         'department_name', COALESCE(sr_d.name, sr_d.department_name)
                       )), '[]'::json)
                        FROM staff_roles sr2
-                       JOIN roles sr_r ON sr2.role_id = sr_r.id
-                       LEFT JOIN departments sr_d ON sr_r.department_id = sr_d.id
+                       JOIN roles sr_r ON sr2.role_id = sr_r.id AND sr_r.organization_id = sr2.organization_id
+                       LEFT JOIN departments sr_d
+                         ON sr_r.department_id = sr_d.id AND sr_d.organization_id = sr_r.organization_id
                        WHERE sr2.staff_id = s.id
                          AND sr2.organization_id = s.organization_id) AS assigned_roles
                FROM staff s
                LEFT JOIN staff m ON s.manager_id = m.id AND m.organization_id = s.organization_id
                LEFT JOIN accounts a ON s.salary_account_id = a.id AND a.organization_id = s.organization_id
-               LEFT JOIN roles r ON s.role_id = r.id
+               LEFT JOIN roles r ON s.role_id = r.id AND r.organization_id = s.organization_id
                LEFT JOIN departments d ON s.department_id = d.id AND d.organization_id = s.organization_id
                LEFT JOIN users u
                  ON u.organization_id = s.organization_id
@@ -52,7 +54,7 @@ export async function GET(request) {
     if (department) { params.push(department); sql += ` AND (s.department = $${params.length} OR d.name = $${params.length})`; }
     if (status) { params.push(status); sql += ` AND s.status = $${params.length}`; }
     sql += ` ORDER BY s.joined_at DESC NULLS LAST, s.created_at DESC`;
-    const result = await query(sql, params);
+    const result = await withOrganizationRbac(perm.auth, () => query(sql, params));
     return NextResponse.json({ success: true, data: result.rows });
   } catch (error) {
     console.error('[Staff] GET error:', error);
@@ -103,12 +105,12 @@ export async function POST(request) {
   const cleanUsername = resolvedUsername.toLowerCase();
 
   // ── Pre-flight DB checks (before opening transaction) ─────────────────────
-  const [emailCheck, usernameCheck, roleCheck, deptCheck] = await Promise.all([
-    query('SELECT id FROM users WHERE email = $1', [cleanEmail]),
-    query('SELECT id FROM users WHERE username = $1', [cleanUsername]),
-    query('SELECT id, name, authority_level FROM roles WHERE id = $1', [role_id]),
-    query('SELECT id, name FROM departments WHERE id = $1', [department_id]),
-  ]);
+  const [emailCheck, usernameCheck, roleCheck, deptCheck] = await withOrganizationRbac(auth, () => Promise.all([
+    query('SELECT id FROM users WHERE LOWER(email) = $1 AND organization_id = $2', [cleanEmail, auth.organizationId]),
+    query('SELECT id FROM users WHERE LOWER(username) = $1 AND organization_id = $2', [cleanUsername, auth.organizationId]),
+    query('SELECT id, name, authority_level FROM roles WHERE id = $1 AND organization_id = $2 AND is_active = true', [role_id, auth.organizationId]),
+    query('SELECT id, name FROM departments WHERE id = $1 AND organization_id = $2', [department_id, auth.organizationId]),
+  ]));
 
   if (emailCheck.rows.length > 0)
     return NextResponse.json({ success: false, error: 'A user account with this email already exists.' }, { status: 409 });
@@ -122,6 +124,8 @@ export async function POST(request) {
   const role = roleCheck.rows[0];
   const dept = deptCheck.rows[0];
 
+  const authorityBlock = await assertAuthorityOver(auth, role.authority_level ?? 0);
+  if (authorityBlock) return authorityBlock;
   if (['admin', 'superadmin'].includes(role.name) && auth.role !== 'superadmin') {
     return NextResponse.json({ success: false, error: 'Only the organization superadmin can create administrators.' }, { status: 403 });
   }
@@ -133,7 +137,7 @@ export async function POST(request) {
   const passwordHash = await hashPassword(resolvedPassword);
 
   // ── Atomic transaction ─────────────────────────────────────────────────────
-  const client = await getPool().connect();
+  const client = await withOrganizationRbac(auth, () => getPool().connect());
   let newUser  = null;
   let newStaff = null;
 
@@ -143,12 +147,12 @@ export async function POST(request) {
     // Step 1: Create user account
     const userResult = await client.query(
       `INSERT INTO users
-         (email, username, name, password_hash, role, role_id,
+         (email, username, name, password_hash, role, role_id, organization_id,
           status, is_active, must_reset_password, first_login_completed, authority_level)
-       VALUES ($1,$2,$3,$4,$5,$6,'active',true,true,false,$7)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',true,true,false,$8)
        RETURNING id, email, username, name, role, authority_level`,
       [cleanEmail, cleanUsername, name.trim(), passwordHash,
-       role.name, role_id, role.authority_level ?? 10]
+       'user', role_id, auth.organizationId, role.authority_level ?? 10]
     );
     newUser = userResult.rows[0];
 
@@ -158,8 +162,8 @@ export async function POST(request) {
          (name, role, role_id, status, joined_at, notes, email, phone,
           department, department_id, position, salary, salary_currency,
           salary_account_id, manager_id, hire_date, photo_url,
-          user_id, linked_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
+          user_id, linked_user_id, organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18,$19)
        RETURNING *`,
       [
         name.trim(), role.name, role_id, status,
@@ -171,6 +175,7 @@ export async function POST(request) {
         salary_account_id || null, manager_id || null,
         hire_date || null, photo_url || null,
         newUser.id,
+        auth.organizationId,
       ]
     );
     newStaff = staffResult.rows[0];
@@ -180,8 +185,8 @@ export async function POST(request) {
 
     // Step 4: staff_roles junction entry
     await client.query(
-      `INSERT INTO staff_roles (staff_id, role_id) VALUES ($1,$2) ON CONFLICT (staff_id, role_id) DO NOTHING`,
-      [newStaff.id, role_id]
+      `INSERT INTO staff_roles (staff_id, role_id, organization_id) VALUES ($1,$2,$3) ON CONFLICT (staff_id, role_id) DO NOTHING`,
+      [newStaff.id, role_id, auth.organizationId]
     );
 
     await client.query('COMMIT');
@@ -245,44 +250,119 @@ export async function POST(request) {
 export async function PATCH(request) {
   const perm = await requirePermission(request, 'staff.update');
   if (perm instanceof NextResponse) return perm;
+  const { auth } = perm;
+  const client = await withOrganizationRbac(auth, () => getPool().connect());
+  let linkedUserIdToInvalidate = null;
   try {
-    const auth = await verifyAuth(request);
     const body = await request.json();
     const { id, ...fields } = body;
     if (!id) return NextResponse.json({ success: false, error: 'id is required' }, { status: 400 });
     const allowed = ['name','role','role_id','status','joined_at','notes','email','phone','department','department_id','position','salary','salary_currency','salary_account_id','manager_id','hire_date','photo_url','is_active','account_status','user_id'];
+    const unsupported = Object.keys(fields).filter((field) => !allowed.includes(field));
+    if (unsupported.length > 0) {
+      return NextResponse.json({ success: false, error: `Unsupported fields: ${unsupported.join(', ')}` }, { status: 400 });
+    }
+    if (fields.role !== undefined && fields.role_id === undefined) {
+      return NextResponse.json({ success: false, error: 'role_id is required when changing a staff role' }, { status: 400 });
+    }
+    if (fields.role_id !== undefined &&
+        (typeof fields.role_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fields.role_id))) {
+      return NextResponse.json({ success: false, error: 'role_id must be a valid role UUID' }, { status: 400 });
+    }
     const updates = [];
     const values = [];
     allowed.forEach(f => {
-      if (fields[f] !== undefined) { values.push(fields[f]); updates.push(`${f} = $${values.length}`); }
+      if (fields[f] !== undefined && !(f === 'role' && fields.role_id !== undefined)) {
+        values.push(fields[f]);
+        updates.push(`${f} = $${values.length}`);
+      }
     });
     if (updates.length === 0) return NextResponse.json({ success: false, error: 'No fields to update' }, { status: 400 });
-    updates.push('updated_at = NOW()');
-    values.push(id);
-    const result = await query(`UPDATE staff SET ${updates.join(', ')} WHERE id = $${values.length} RETURNING *`, values);
-    if (!result.rows[0]) return NextResponse.json({ success: false, error: 'Staff not found' }, { status: 404 });
+    await client.query('BEGIN');
+    const current = await client.query(
+      'SELECT id, role_id, user_id, linked_user_id FROM public.staff WHERE id = $1 AND organization_id = $2 FOR UPDATE',
+      [id, auth.organizationId]
+    );
+    if (!current.rows[0]) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Staff not found' }, { status: 404 });
+    }
 
-    // Sync role to the linked user account when role_id changes
-    if (fields.role_id && result.rows[0].user_id) {
-      try {
-        const roleRes = await query('SELECT name, authority_level FROM roles WHERE id = $1', [fields.role_id]);
-        if (roleRes.rows[0]) {
-          await query(
-            'UPDATE users SET role = $1, role_id = $2, authority_level = $3 WHERE id = $4',
-            [roleRes.rows[0].name, fields.role_id, roleRes.rows[0].authority_level ?? 10, result.rows[0].user_id]
-          );
-        }
-      } catch (syncErr) {
-        console.warn('[Staff] role sync to user failed:', syncErr.message);
+    let selectedRole = null;
+    if (fields.role_id !== undefined) {
+      const roleResult = await client.query(
+        'SELECT id, name, authority_level FROM public.roles WHERE id = $1 AND organization_id = $2 AND is_active = true',
+        [fields.role_id, auth.organizationId]
+      );
+      selectedRole = roleResult.rows[0];
+      if (!selectedRole) {
+        await client.query('ROLLBACK');
+        return NextResponse.json({ success: false, error: 'Role not found in this organization' }, { status: 400 });
+      }
+      const authorityBlock = await assertAuthorityOver(auth, selectedRole.authority_level ?? 10);
+      if (authorityBlock) {
+        await client.query('ROLLBACK');
+        return authorityBlock;
+      }
+      values.push(selectedRole.name);
+      updates.push(`role = $${values.length}`);
+    }
+
+    updates.push('updated_at = NOW()');
+    values.push(id, auth.organizationId);
+    const result = await client.query(
+      `UPDATE public.staff SET ${updates.join(', ')}
+        WHERE id = $${values.length - 1} AND organization_id = $${values.length}
+        RETURNING *`,
+      values
+    );
+    if (!result.rows[0]) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Staff not found' }, { status: 404 });
+    }
+
+    if (selectedRole) {
+      if (current.rows[0].role_id) {
+        await client.query(
+          'DELETE FROM public.staff_roles WHERE staff_id = $1 AND role_id = $2 AND organization_id = $3',
+          [id, current.rows[0].role_id, auth.organizationId]
+        );
+      }
+      await client.query(
+        `INSERT INTO public.staff_roles (staff_id, role_id, assigned_by, organization_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (staff_id, role_id) DO NOTHING`,
+        [id, selectedRole.id, auth.userId, auth.organizationId]
+      );
+
+      const userId = current.rows[0].linked_user_id || current.rows[0].user_id;
+      if (userId) {
+        linkedUserIdToInvalidate = userId;
+        await client.query(
+          `UPDATE public.users
+              SET role = $1, role_id = $2, authority_level = $3, updated_at = NOW()
+            WHERE id = $4 AND organization_id = $5`,
+          ['user', selectedRole.id, selectedRole.authority_level ?? 10, userId, auth.organizationId]
+        );
       }
     }
 
-    await query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)`,
-      [auth.userId, 'UPDATE', 'staff', id, JSON.stringify(fields)]);
+    await client.query(
+      `INSERT INTO public.audit_logs (user_id, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [auth.userId, 'UPDATE', 'staff', id, JSON.stringify(fields)]
+    );
+    await client.query('COMMIT');
+    if (linkedUserIdToInvalidate) invalidatePermissionCache(linkedUserIdToInvalidate);
     return NextResponse.json({ success: true, data: result.rows[0] });
   } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (rollbackError) {
+      console.error('[Staff] PATCH rollback failed:', rollbackError);
+    }
     console.error('[Staff] PATCH error:', error);
     return NextResponse.json({ success: false, error: 'Failed to update staff member' }, { status: 500 });
+  } finally {
+    client.release();
   }
 }
 

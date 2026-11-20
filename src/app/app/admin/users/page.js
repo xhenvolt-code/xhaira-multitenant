@@ -27,7 +27,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editUser, setEditUser] = useState(null);
-  const [editForm, setEditForm] = useState({ role: '', status: '' });
+  const [editForm, setEditForm] = useState({ role_id: '', status: '' });
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -37,18 +37,35 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     fetchUsers();
-    fetchWithAuth('/api/admin/roles').then(r => r.json()).then(j => { if (j.success) setRoles(j.data || []); }).catch(() => {});
+    fetchWithAuth('/api/admin/users/available-roles')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Failed to load roles');
+        setRoles(data.data || []);
+      })
+      .catch((error) => {
+        console.error('Failed to load organization roles:', error);
+        toast.error(error.message || 'Failed to load roles');
+      });
   }, []);
 
   const fetchUsers = async () => {
     try {
       const res = await fetchWithAuth('/api/admin/users');
       const j = await res.json();
-      if (j.success) setUsers(j.data);
-    } catch (err) { console.error(err); } finally { setLoading(false); }
+      if (!res.ok || !j.success) throw new Error(j.error || 'Failed to load users');
+      setUsers(j.data || []);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Failed to load users');
+    } finally { setLoading(false); }
   };
 
-  const startEdit = (u) => { setEditUser(u); setEditForm({ role: u.role, status: u.status || 'active' }); };
+  const startEdit = (u) => {
+    const role = roles.find((item) => item.id === u.role_id || item.name === u.role);
+    setEditUser(u);
+    setEditForm({ role_id: role?.id || '', status: u.status || 'active' });
+  };
 
   const saveEdit = async () => {
     setSaving(true);
@@ -58,8 +75,12 @@ export default function AdminUsersPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editForm),
       });
-      if ((await res.json()).success) { toast.success('User updated'); setEditUser(null); fetchUsers(); }
-    } catch (err) { console.error(err); } finally { setSaving(false); }
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update user');
+      toast.success('User updated');
+      setEditUser(null);
+      fetchUsers();
+    } catch (err) { console.error(err); toast.error(err.message || 'Failed to update user'); } finally { setSaving(false); }
   };
 
   const deleteUser = async (userId) => {
@@ -85,11 +106,13 @@ export default function AdminUsersPage() {
   };
 
   const filteredUsers = users
-    .filter((u) => filter === 'all' || u.status === filter || u.role === filter)
+    .filter((u) => filter === 'all' || u.status === filter || (u.role_name || u.role) === filter)
     .filter((u) => {
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
-      return (u.name || '').toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.toLowerCase().includes(q);
+      return (u.name || '').toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.role_name || u.role).toLowerCase().includes(q);
     });
 
   const counts = {
@@ -203,15 +226,13 @@ export default function AdminUsersPage() {
             <div>
               <label className="block text-sm text-muted-foreground mb-1">Role</label>
               <select
-                value={editForm.role}
-                onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                value={editForm.role_id}
+                onChange={(e) => setEditForm((f) => ({ ...f, role_id: e.target.value }))}
                 className="w-full px-3 py-2 bg-muted dark:bg-white/[0.06] border border-border dark:border-white/[0.10] rounded-xl text-foreground focus:outline-none focus:border-border dark:border-white/[0.10] [&>option]:bg-background [&>option]:text-foreground"
               >
-                <option value="user">user</option>
-                <option value="admin">admin</option>
-                <option value="superadmin">superadmin</option>
-                {roles.filter(r => !['user','admin','superadmin'].includes(r.name)).map((r) => (
-                  <option key={r.id} value={r.name}>{r.name}{r.department_name ? ` (${r.department_name})` : ''}</option>
+                <option value="">Select an organization role</option>
+                {roles.filter((role) => role.name !== 'superadmin').map((role) => (
+                  <option key={role.id} value={role.id}>{role.alias || role.name}{role.department_name ? ` (${role.department_name})` : ''}</option>
                 ))}
               </select>
             </div>
@@ -288,8 +309,8 @@ export default function AdminUsersPage() {
 
               {/* Role */}
               <div className="mt-2 sm:mt-0">
-                <span className={`inline-flex px-2 py-0.5 rounded-md text-[11px] font-medium ${ROLE_STYLES[u.role] || ROLE_STYLES.user}`}>
-                  {u.role}
+                <span className={`inline-flex px-2 py-0.5 rounded-md text-[11px] font-medium ${ROLE_STYLES[u.role_name || u.role] || ROLE_STYLES.user}`}>
+                  {u.role_name || u.role}
                 </span>
               </div>
 
@@ -332,6 +353,7 @@ export default function AdminUsersPage() {
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
         onUserCreated={() => fetchUsers()}
+        roles={roles}
       />
     </div>
   );

@@ -1,25 +1,17 @@
 /**
- * GET /api/admin/debug
- * Superadmin-only endpoint that surfaces identity integrity stats:
- *  - Total users / staff / roles
- *  - Linked users (staff_id set)
- *  - Orphan users (no staff_id)
- *  - Staff without users
- *  - Staff without roles
- *  - staff_roles count
+ * Organization-scoped identity integrity diagnostics for the organization owner.
  */
-
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
 export async function GET(request) {
-  const perm = await requirePermission(request, 'users.view');
-  if (perm instanceof NextResponse) return perm;
-
-  // Only superadmin may access debug data
-  if (perm.auth.role !== 'superadmin') {
-    return NextResponse.json({ error: 'Superadmin only' }, { status: 403 });
+  const permission = await requirePermission(request, 'users.view');
+  if (permission instanceof NextResponse) return permission;
+  const { auth } = permission;
+  if (auth.role !== 'superadmin') {
+    return NextResponse.json({ error: 'Organization superadmin only' }, { status: 403 });
   }
 
   try {
@@ -34,42 +26,59 @@ export async function GET(request) {
       staffRolesCount,
       activeUsers,
       pendingUsers,
-    ] = await Promise.all([
-      query('SELECT COUNT(*) AS cnt FROM users'),
-      query('SELECT COUNT(*) AS cnt FROM staff'),
-      query('SELECT COUNT(*) AS cnt FROM roles'),
-      query('SELECT COUNT(*) AS cnt FROM users WHERE staff_id IS NOT NULL'),
-      query('SELECT COUNT(*) AS cnt FROM users WHERE staff_id IS NULL'),
-      query(`
-        SELECT COUNT(*) AS cnt FROM staff s
-        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.staff_id = s.id)
-          AND s.linked_user_id IS NULL
-      `),
-      query('SELECT COUNT(*) AS cnt FROM staff WHERE role_id IS NULL'),
-      query('SELECT COUNT(*) AS cnt FROM staff_roles'),
-      query("SELECT COUNT(*) AS cnt FROM users WHERE is_active = true AND status = 'active'"),
-      query("SELECT COUNT(*) AS cnt FROM users WHERE status = 'pending'"),
-    ]);
+    ] = await withOrganizationRbac(auth, () => Promise.all([
+      query('SELECT COUNT(*) AS cnt FROM public.users WHERE organization_id = $1', [auth.organizationId]),
+      query('SELECT COUNT(*) AS cnt FROM public.staff WHERE organization_id = $1', [auth.organizationId]),
+      query('SELECT COUNT(*) AS cnt FROM public.roles WHERE organization_id = $1', [auth.organizationId]),
+      query('SELECT COUNT(*) AS cnt FROM public.users WHERE staff_id IS NOT NULL AND organization_id = $1', [auth.organizationId]),
+      query('SELECT COUNT(*) AS cnt FROM public.users WHERE staff_id IS NULL AND organization_id = $1', [auth.organizationId]),
+      query(
+        `SELECT COUNT(*) AS cnt FROM public.staff s
+          WHERE s.organization_id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM public.users u
+               WHERE u.staff_id = s.id AND u.organization_id = s.organization_id
+            )
+            AND s.linked_user_id IS NULL`,
+        [auth.organizationId]
+      ),
+      query('SELECT COUNT(*) AS cnt FROM public.staff WHERE role_id IS NULL AND organization_id = $1', [auth.organizationId]),
+      query('SELECT COUNT(*) AS cnt FROM public.staff_roles WHERE organization_id = $1', [auth.organizationId]),
+      query(
+        `SELECT COUNT(*) AS cnt FROM public.users
+          WHERE is_active = true AND status = 'active' AND organization_id = $1`,
+        [auth.organizationId]
+      ),
+      query(
+        `SELECT COUNT(*) AS cnt FROM public.users
+          WHERE status = 'pending' AND organization_id = $1`,
+        [auth.organizationId]
+      ),
+    ]));
 
-    // Get orphan user list
-    const orphanList = await query(`
-      SELECT id, username, email, name, role, authority_level, created_at
-      FROM users WHERE staff_id IS NULL ORDER BY created_at DESC
-    `);
-
-    // Get staff without user list
-    const staffNoUserList = await query(`
-      SELECT s.id, s.name, s.email, s.role_id, r.name AS role_name
-      FROM staff s
-      LEFT JOIN roles r ON s.role_id = r.id
-      WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.staff_id = s.id)
-        AND s.linked_user_id IS NULL
-    `);
-
-    // Get staff without role
-    const staffNoRoleList = await query(`
-      SELECT id, name, email FROM staff WHERE role_id IS NULL
-    `);
+    const orphanList = await withOrganizationRbac(auth, () => query(
+      `SELECT id, username, email, name, role, authority_level, created_at
+         FROM public.users
+        WHERE staff_id IS NULL AND organization_id = $1
+        ORDER BY created_at DESC`,
+      [auth.organizationId]
+    ));
+    const staffNoUserList = await withOrganizationRbac(auth, () => query(
+      `SELECT s.id, s.name, s.email, s.role_id, r.name AS role_name
+         FROM public.staff s
+         LEFT JOIN public.roles r ON s.role_id = r.id AND r.organization_id = s.organization_id
+        WHERE s.organization_id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM public.users u
+             WHERE u.staff_id = s.id AND u.organization_id = s.organization_id
+          )
+          AND s.linked_user_id IS NULL`,
+      [auth.organizationId]
+    ));
+    const staffNoRoleList = await withOrganizationRbac(auth, () => query(
+      'SELECT id, name, email FROM public.staff WHERE role_id IS NULL AND organization_id = $1',
+      [auth.organizationId]
+    ));
 
     return NextResponse.json({
       success: true,
@@ -92,8 +101,8 @@ export async function GET(request) {
         },
         integrity: {
           healthy: parseInt(orphanUsers.rows[0].cnt, 10) === 0 &&
-                   parseInt(staffWithoutUser.rows[0].cnt, 10) === 0 &&
-                   parseInt(staffWithoutRole.rows[0].cnt, 10) === 0,
+            parseInt(staffWithoutUser.rows[0].cnt, 10) === 0 &&
+            parseInt(staffWithoutRole.rows[0].cnt, 10) === 0,
         },
         orphanUsers: orphanList.rows,
         staffWithoutUser: staffNoUserList.rows,

@@ -1,125 +1,139 @@
 import { NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
 import { getPool } from '@/lib/db.js';
-import { requirePermission } from '@/lib/permissions.js';
+import { hashPassword } from '@/lib/auth.js';
+import { assertAuthorityOver, requirePermission, invalidateAllPermissionCaches } from '@/lib/permissions.js';
+import { logRbacEvent, extractRbacMetadata } from '@/lib/rbac-audit.js';
+import { withOrganizationRbac } from '@/lib/rbac-tenant.js';
 
-const pool = getPool();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * POST /api/admin/staff/create-with-account
- * Create staff with user account in a single transaction
+ * Create an organization staff record and linked user with an explicitly selected role.
  */
-export async function POST(req) {
-  const permission = await requirePermission(req, 'staff.create');
+export async function POST(request) {
+  const permission = await requirePermission(request, 'staff.create');
   if (permission instanceof NextResponse) return permission;
   const { auth } = permission;
-  const client = await pool.connect();
-  
+  let body;
+  try { body = await request.json(); } catch {
+    return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 });
+  }
+
+  const { staff_name: staffName, staff_email: staffEmail, username, password, department_id: departmentId } = body;
+  const cleanName = typeof staffName === 'string' ? staffName.trim() : '';
+  const cleanEmail = typeof staffEmail === 'string' ? staffEmail.trim().toLowerCase() : '';
+  const cleanUsername = typeof username === 'string' ? username.trim().toLowerCase() : '';
+  if (!cleanName || !cleanEmail || cleanUsername.length < 3 || typeof password !== 'string' || password.length < 8) {
+    return NextResponse.json({ success: false, error: 'Name, email, username (min. 3 characters), and password (min. 8 characters) are required' }, { status: 400 });
+  }
+  if (!body.role_id && !body.role_name) {
+    return NextResponse.json({ success: false, error: 'Select an organization role for this staff member' }, { status: 400 });
+  }
+  if (body.role_id !== undefined &&
+      (typeof body.role_id !== 'string' || !UUID_PATTERN.test(body.role_id))) {
+    return NextResponse.json({ success: false, error: 'role_id must be a valid role UUID' }, { status: 400 });
+  }
+
+  const client = await withOrganizationRbac(auth, () => getPool().connect());
   try {
-    const { staff_name, staff_email, username, password, role_name, department_id } = await req.json();
-    
-    if (!staff_name || !staff_email || !username || !password) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+    await client.query('BEGIN');
+    const roleResult = await client.query(
+      `SELECT id, name, authority_level
+         FROM public.roles
+        WHERE organization_id = $1 AND is_active = true
+          AND (($2::uuid IS NOT NULL AND id = $2::uuid) OR ($2::uuid IS NULL AND name = $3))
+        LIMIT 1`,
+      [auth.organizationId, body.role_id || null, body.role_name || '']
+    );
+    const role = roleResult.rows[0];
+    if (!role) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Selected role was not found in this organization' }, { status: 400 });
+    }
+    if (role.name === 'superadmin' || (role.name === 'admin' && auth.role !== 'superadmin')) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'You cannot assign this role' }, { status: 403 });
+    }
+    const authorityBlock = await assertAuthorityOver(auth, role.authority_level ?? 0);
+    if (authorityBlock) {
+      await client.query('ROLLBACK');
+      return authorityBlock;
     }
 
-    if (['admin', 'superadmin'].includes(role_name) && auth.role !== 'superadmin') {
-      return NextResponse.json({ error: 'Only the organization superadmin can create administrators' }, { status: 403 });
-    }
-    if (role_name === 'superadmin') {
-      return NextResponse.json({ error: 'A new organization superadmin can only be created through organization registration' }, { status: 403 });
-    }
-    
-    await client.query('BEGIN');
-    
-    try {
-      // 1. Get or create role
-      let roleResult = await client.query(
-        'SELECT id FROM roles WHERE name = $1',
-        [role_name || 'staff']
+    if (departmentId) {
+      const department = await client.query(
+        'SELECT id FROM public.departments WHERE id = $1 AND organization_id = $2',
+        [departmentId, auth.organizationId]
       );
-      
-      let role_id = roleResult.rows[0]?.id;
-      if (!role_id) {
-        roleResult = await client.query(
-          'INSERT INTO roles (name) VALUES ($1) RETURNING id',
-          [role_name || 'staff']
-        );
-        role_id = roleResult.rows[0].id;
+      if (!department.rows[0]) {
+        await client.query('ROLLBACK');
+        return NextResponse.json({ success: false, error: 'Department was not found in this organization' }, { status: 400 });
       }
-      
-      // 2. Hash password
-      const passwordHash = await bcrypt.hash(password, 10);
-      
-      // 3. Create user
-      const userResult = await client.query(
-        `INSERT INTO users (username, email, password, role, role_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        [username, staff_email, passwordHash, role_name || 'staff', role_id]
-      );
-      
-      const user_id = userResult.rows[0].id;
-      
-      // 4. Create staff record
-      const staffResult = await client.query(
-        `INSERT INTO staff (name, email, user_id, linked_user_id, role_id, department_id, account_status, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', CURRENT_TIMESTAMP)
-         RETURNING *`,
-        [staff_name, staff_email, user_id, user_id, role_id, department_id]
-      );
-      
-      // 5. Assign role permissions
-      const permResult = await client.query(
-        'SELECT permission_id FROM role_permissions WHERE role_id = $1',
-        [role_id]
-      );
-      
-      if (permResult.rowCount === 0) {
-        // Assign default permissions for the role
-        const defaultPerms = await client.query(
-          'SELECT id FROM permissions WHERE role_default = $1',
-          [role_name || 'staff']
-        );
-        
-        for (const perm of defaultPerms.rows) {
-          await client.query(
-            'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [role_id, perm.id]
-          );
-        }
-      }
-      
-      // Log the creation
-      await client.query(
-        `INSERT INTO system_logs (level, module, action, message, details, user_id)
-         VALUES ('info', 'staff_management', 'staff_created_with_account', $1, $2, NULL)`,
-        [
-          `Staff ${staff_name} created with user account`,
-          JSON.stringify({ staff_id: staffResult.rows[0].id, user_id, username })
-        ]
-      );
-      
-      await client.query('COMMIT');
-      
-      return NextResponse.json({
-        success: true,
-        staff: staffResult.rows[0],
-        user_id
-      }, { status: 201 });
-      
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
     }
-  } catch (error) {
-    console.error('Error creating staff with account:', error);
-    return NextResponse.json(
-      { error: 'Failed to create staff: ' + error.message },
-      { status: 500 }
+
+    const duplicate = await client.query(
+      `SELECT 1 FROM public.users
+        WHERE organization_id = $1 AND (LOWER(email) = $2 OR LOWER(username) = $3)
+        LIMIT 1`,
+      [auth.organizationId, cleanEmail, cleanUsername]
     );
+    if (duplicate.rows[0]) {
+      await client.query('ROLLBACK');
+      return NextResponse.json({ success: false, error: 'Email or username is already in use' }, { status: 409 });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const userResult = await client.query(
+      `INSERT INTO public.users
+         (username, email, name, password_hash, role, role_id, organization_id,
+          status, is_active, must_reset_password, first_login_completed, authority_level,
+          created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', true, true, false, $8, NOW(), NOW())
+       RETURNING id, username, email, name, role, role_id, authority_level`,
+      [cleanUsername, cleanEmail, cleanName, passwordHash, 'user', role.id, auth.organizationId, role.authority_level ?? 10]
+    );
+    const user = userResult.rows[0];
+
+    const staffResult = await client.query(
+      `INSERT INTO public.staff
+         (name, email, user_id, linked_user_id, role_id, department_id, organization_id, status)
+       VALUES ($1, $2, $3, $3, $4, $5, $6, 'active')
+       RETURNING *`,
+      [cleanName, cleanEmail, user.id, role.id, departmentId || null, auth.organizationId]
+    );
+    const staff = staffResult.rows[0];
+    await client.query(
+      'UPDATE public.users SET staff_id = $1 WHERE id = $2 AND organization_id = $3',
+      [staff.id, user.id, auth.organizationId]
+    );
+    await client.query(
+      `INSERT INTO public.staff_roles (staff_id, role_id, assigned_by, organization_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (staff_id, role_id) DO NOTHING`,
+      [staff.id, role.id, auth.userId, auth.organizationId]
+    );
+    await client.query('COMMIT');
+
+    invalidateAllPermissionCaches();
+    await withOrganizationRbac(auth, () => logRbacEvent({
+      userId: auth.userId,
+      action: 'staff_created_with_account',
+      entityType: 'staff',
+      entityId: staff.id,
+      details: { userId: user.id, roleId: role.id, roleName: role.name },
+      ...extractRbacMetadata(request),
+    }));
+    return NextResponse.json({ success: true, staff, user_id: user.id }, { status: 201 });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (rollbackError) {
+      console.error('Failed to roll back staff/user creation:', rollbackError);
+    }
+    if (error.code === '23505') {
+      return NextResponse.json({ success: false, error: 'Email or username is already in use' }, { status: 409 });
+    }
+    console.error('Error creating organization staff with account:', error);
+    return NextResponse.json({ success: false, error: 'Failed to create staff account' }, { status: 500 });
   } finally {
     client.release();
   }

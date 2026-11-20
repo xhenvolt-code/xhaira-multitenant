@@ -300,12 +300,21 @@ export default function StaffPage() {
         // For edits, sync roles via staff_roles
         if (editId && staffId && selectedRoleIds.length >= 0) {
           try {
-            await fetchWithAuth(`/api/admin/staff/${staffId}/roles`, {
+            const rolesResponse = await fetchWithAuth(`/api/admin/staff/${staffId}/roles`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ role_ids: selectedRoleIds }),
             });
-          } catch {}
+            const rolesResult = await rolesResponse.json();
+            if (!rolesResponse.ok || !rolesResult.success) {
+              throw new Error(rolesResult.error || 'Failed to update staff roles');
+            }
+          } catch (error) {
+            toast.error(`Staff details saved, but role assignment failed: ${error.message || 'request failed'}`);
+            console.error('Failed to sync staff roles:', error);
+            fetchStaff();
+            return;
+          }
         }
         const msg = editId
           ? 'Staff updated'

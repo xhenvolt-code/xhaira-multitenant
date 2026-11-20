@@ -4,7 +4,9 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { query, isDatabaseConnectionError } from './db.js';
+import { randomUUID } from 'node:crypto';
+import { getPool, query, isDatabaseConnectionError } from './db.js';
+import { getOrganizationContext } from './organization-context.js';
 
 const SALT_ROUNDS = 10;
 
@@ -84,59 +86,85 @@ export async function createUser({
   isActive = true,
   status = 'active',
   staffId = null,
+  roleId = null,
   mustResetPassword = false,
 }) {
-  // Derive username from email if not supplied
-  const resolvedUsername =
-    username ||
-    email
-      .split('@')[0]
-      .toLowerCase()
-      .replace(/[^a-z0-9_]/g, '_')
-      .slice(0, 100);
-
+  if (typeof email !== 'string' || typeof passwordHash !== 'string' || typeof name !== 'string') {
+    throw new TypeError('Email, password hash, and name are required to create a user');
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  const resolvedUsername = typeof username === 'string' && username.trim()
+    ? username.trim().toLowerCase()
+    : `${cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_').slice(0, 80)}_${randomUUID().slice(0, 8)}`;
+  if (!/^[a-z0-9_]{3,100}$/.test(resolvedUsername)) {
+    throw new TypeError('Username must be 3 to 100 characters and contain only letters, numbers, or underscores');
+  }
+  if (!['user', 'admin', 'superadmin', 'viewer'].includes(role)) {
+    throw new TypeError('User role must be a supported base role');
+  }
   try {
-    // Create user with all required columns
-    // Schema MUST have all these columns or this will fail (no fallback)
-    const insertSql = `
-      INSERT INTO users (
-        email, password_hash, name, username, role, is_active, status,
-        staff_id, must_reset_password, organization_id,
-        created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, public.current_organization_id(), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      RETURNING id, email, name, username, role, is_active, status, organization_id, created_at
-    `;
+    const organizationId = getOrganizationContext();
+    if (!organizationId) throw new Error('Organization context is required to create a user');
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      let authorityLevel = 10;
+      if (roleId) {
+        const selectedRole = await client.query(
+          `SELECT name, authority_level
+             FROM public.roles
+            WHERE id = $1 AND organization_id = $2 AND is_active = true
+            FOR SHARE`,
+          [roleId, organizationId]
+        );
+        if (!selectedRole.rows[0]) {
+          throw new TypeError('Selected role is not active in this organization');
+        }
+        authorityLevel = selectedRole.rows[0].authority_level ?? authorityLevel;
+      }
 
-    const result = await query(insertSql, [
-      email,
-      passwordHash,
-      name,
-      resolvedUsername,
-      role,
-      isActive,
-      status,
-      staffId,
-      mustResetPassword
-    ]);
-
-    return result.rows[0] || null;
+      const result = await client.query(
+        `INSERT INTO public.users (
+           email, password_hash, name, username, role, role_id, authority_level,
+           is_active, status, staff_id, must_reset_password, first_login_completed,
+           organization_id, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+         RETURNING id, email, name, username, role, role_id, authority_level,
+                   is_active, status, organization_id, created_at`,
+        [
+          cleanEmail,
+          passwordHash,
+          name.trim(),
+          resolvedUsername,
+          role,
+          roleId,
+          authorityLevel,
+          isActive,
+          status,
+          staffId,
+          mustResetPassword,
+          !mustResetPassword,
+          organizationId,
+        ]
+      );
+      await client.query('COMMIT');
+      return result.rows[0] || null;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (rollbackError) {
+        console.error('Failed to roll back user creation:', rollbackError);
+      }
+      if (error.code === '23505') {
+        if (error.constraint?.includes('username')) return { error: 'Username already taken' };
+        if (error.constraint?.includes('email')) return { error: 'Email already exists' };
+      }
+      throw error;
+    } finally {
+      await client.release();
+    }
   } catch (error) {
-    console.error('Error creating user:', error.message);
-    
-    // Handle unique constraint violations
-    if (error.code === '23505') {
-      if (error.detail?.includes('username')) return { error: 'Username already taken' };
-      if (error.detail?.includes('email')) return { error: 'Email already exists' };
-    }
-    
-    // If column is missing, this is a schema integrity error - DO NOT fallback
-    if (error.code === '42703') {
-      console.error('[SCHEMA ERROR] User table is missing required columns. Database schema is corrupted.', error.message);
-      throw new Error('Database schema integrity violation: users table missing required columns');
-    }
-    
-    return null;
+    console.error('Error creating user:', { code: error.code, constraint: error.constraint, message: error.message });
+    throw error;
   }
 }
 

@@ -60,6 +60,7 @@ export async function GET(request) {
         u.email,
         u.name,
         u.role,
+        u.role_id,
         u.status,
         u.is_active,
         u.authority_level,
@@ -70,8 +71,8 @@ export async function GET(request) {
         o.slug AS organization_slug
       FROM users u
       JOIN organizations o ON o.id = u.organization_id
-      WHERE u.id = $1`,
-      [session.userId]
+      WHERE u.id = $1 AND u.organization_id = $2`,
+      [session.userId, session.organizationId]
     );
 
     if (userResult.rows.length === 0) {
@@ -86,43 +87,42 @@ export async function GET(request) {
 
     // Fetch RBAC roles for the user
     let rbacRoles = [];
-    try {
-      const rolesResult = await query(
-        `SELECT r.name, r.hierarchy_level
-         FROM users u
-         JOIN staff s ON u.staff_id = s.id
-         JOIN staff_roles sr ON sr.staff_id = s.id
-         JOIN roles r ON sr.role_id = r.id
-         WHERE u.id = $1`,
-        [user.id]
-      );
-      rbacRoles = rolesResult.rows.map(r => r.name);
-    } catch (_) { /* RBAC tables may not exist yet */ }
+    const rolesResult = await query(
+      `SELECT DISTINCT r.name, r.hierarchy_level
+         FROM public.users u
+         LEFT JOIN public.staff s ON u.staff_id = s.id AND s.organization_id = u.organization_id
+         LEFT JOIN public.staff_roles sr ON sr.staff_id = s.id AND sr.organization_id = s.organization_id
+         JOIN public.roles r
+           ON r.organization_id = u.organization_id AND r.is_active = true
+          AND (r.id = COALESCE(sr.role_id, u.role_id) OR (sr.role_id IS NULL AND u.role_id IS NULL AND r.name = u.role))
+        WHERE u.id = $1 AND u.organization_id = $2`,
+      [user.id, session.organizationId]
+    );
+    rbacRoles = rolesResult.rows.map(r => r.name);
 
     // Fetch permissions using cached system
     let permissions = [];
     let hierarchyLevel = 5;
     let authorityLevel = user.authority_level ?? 10;
-    try {
-      if (isSuperadmin) {
-        permissions = ['*'];
-        hierarchyLevel = 1;
-        authorityLevel = 100;
-      } else {
-        [permissions, hierarchyLevel, authorityLevel] = await Promise.all([
-          getUserPermissions(user.id),
-          getUserHierarchyLevel(user.id),
-          getUserAuthorityLevel(user.id),
-        ]);
-      }
-    } catch (_) { /* RBAC tables may not exist yet */ }
+    if (isSuperadmin) {
+      permissions = ['*'];
+      hierarchyLevel = 1;
+      authorityLevel = 100;
+    } else {
+      [permissions, hierarchyLevel, authorityLevel] = await Promise.all([
+        getUserPermissions(user.id),
+        getUserHierarchyLevel(user.id),
+        getUserAuthorityLevel(user.id),
+      ]);
+    }
 
     // Count pending approval requests for this user (if they have authority)
     let pendingApprovals = 0;
     try {
       if (hierarchyLevel <= 3) {
         const approvalResult = await query(
-          `SELECT COUNT(*) AS cnt FROM approval_requests WHERE status = 'pending'`
+          `SELECT COUNT(*) AS cnt FROM approval_requests WHERE status = 'pending' AND organization_id = $1`,
+          [session.organizationId]
         );
         pendingApprovals = parseInt(approvalResult.rows[0]?.cnt || 0, 10);
       }
