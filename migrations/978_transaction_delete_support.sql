@@ -18,13 +18,21 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_transactions_immutable ON public.transactions;
+DROP TRIGGER IF EXISTS trg_transactions_immutable_update ON public.transactions;
 CREATE TRIGGER trg_transactions_immutable
-  BEFORE UPDATE OR DELETE ON public.transactions
+  BEFORE DELETE ON public.transactions
+  FOR EACH ROW EXECUTE FUNCTION public.guard_immutable_financial_rows();
+CREATE TRIGGER trg_transactions_immutable_update
+  BEFORE UPDATE ON public.transactions
   FOR EACH ROW EXECUTE FUNCTION public.guard_immutable_financial_rows();
 
 DROP TRIGGER IF EXISTS trg_ledger_entries_immutable ON public.ledger_entries;
+DROP TRIGGER IF EXISTS trg_ledger_entries_immutable_update ON public.ledger_entries;
 CREATE TRIGGER trg_ledger_entries_immutable
-  BEFORE UPDATE OR DELETE ON public.ledger_entries
+  BEFORE DELETE ON public.ledger_entries
+  FOR EACH ROW EXECUTE FUNCTION public.guard_immutable_financial_rows();
+CREATE TRIGGER trg_ledger_entries_immutable_update
+  BEFORE UPDATE ON public.ledger_entries
   FOR EACH ROW EXECUTE FUNCTION public.guard_immutable_financial_rows();
 
 DO $$
