@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Receipt, Search, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
+import { Receipt, Search, ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useApiRefresh } from '@/lib/use-api-refresh';
 import Link from 'next/link';
+import Swal from 'sweetalert2';
 
 const TYPE_COLORS = {
   deposit: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -46,6 +47,7 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, pages: 1 });
   const [expandedId, setExpandedId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -66,6 +68,35 @@ export default function TransactionsPage() {
     }
   };
   useApiRefresh(fetchTransactions);
+
+  const deleteTransaction = async (transaction) => {
+    const confirmation = await Swal.fire({
+      title: 'Delete this transaction?',
+      text: `This permanently deletes ${transaction.description || transaction.transaction_type || 'this transaction'}, its ledger entries, and records linked by the database. The audit record is retained.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete transaction',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626',
+      reverseButtons: true,
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setDeletingId(transaction.id);
+    try {
+      const response = await fetchWithAuth(`/api/transactions/${transaction.id}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not delete transaction.');
+      setTransactions((current) => current.filter((item) => item.id !== transaction.id));
+      setPagination((current) => ({ ...current, total: Math.max(0, current.total - 1) }));
+      if (expandedId === transaction.id) setExpandedId(null);
+      await Swal.fire({ title: 'Transaction deleted', icon: 'success', timer: 1400, showConfirmButton: false });
+    } catch (error) {
+      await Swal.fire({ title: 'Delete failed', text: error.message, icon: 'error' });
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   useEffect(() => { fetchTransactions(); }, [page, typeFilter]);
 
@@ -172,6 +203,11 @@ export default function TransactionsPage() {
                         className="text-xs font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
                         Download
                       </a>
+                      <button type="button" disabled={deletingId === tx.id} onClick={() => deleteTransaction(tx)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                        aria-label={`Delete transaction ${receiptNumber}`}>
+                        <Trash2 className="h-3.5 w-3.5" /> {deletingId === tx.id ? 'Deleting…' : 'Delete'}
+                      </button>
                     </div>
                   </div>
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { query } from '@/lib/db.js';
+import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
@@ -48,5 +48,62 @@ export async function GET(request, { params }) {
   } catch (error) {
     console.error('[Transaction Detail] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request, { params }) {
+  try {
+    const perm = await requirePermission(request, 'finance.manage');
+    if (perm instanceof NextResponse) return perm;
+    const organizationId = perm.auth.organizationId;
+    const { id } = await params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ''))) {
+      return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 });
+    }
+
+    return await runWithOrganizationContext(organizationId, async () => {
+      const client = await getPool().connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId]);
+        await client.query("SELECT set_config('app.allow_transaction_delete', 'on', true)");
+        const deleted = await client.query(
+          `DELETE FROM public.transactions
+            WHERE id = $1 AND organization_id = $2
+            RETURNING id, transaction_type, description, receipt_number`,
+          [id, organizationId]
+        );
+        if (!deleted.rows[0]) {
+          await client.query('ROLLBACK');
+          return NextResponse.json({ success: false, error: 'Transaction not found' }, { status: 404 });
+        }
+        await client.query(
+          `INSERT INTO public.audit_logs
+             (organization_id, user_id, action, entity_type, entity_id, details)
+           VALUES ($1, $2, 'DELETE', 'transaction', $3, $4)`,
+          [organizationId, perm.auth.userId, id, JSON.stringify({
+            transaction_type: deleted.rows[0].transaction_type,
+            description: deleted.rows[0].description,
+            receipt_number: deleted.rows[0].receipt_number,
+          })]
+        );
+        await client.query('COMMIT');
+        return NextResponse.json({ success: true, data: { id, deleted: true } });
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        await client.release();
+      }
+    });
+  } catch (error) {
+    console.error('[Transaction] DELETE error:', error.message);
+    if (error.code === '23503') {
+      return NextResponse.json({ success: false, error: 'A linked record prevented transaction deletion. Apply migration 978 and retry.' }, { status: 409 });
+    }
+    if (error.code === '42501' || /immutable/i.test(error.message || '')) {
+      return NextResponse.json({ success: false, error: 'Transaction deletion is unavailable until migration 978 is applied.' }, { status: 409 });
+    }
+    return NextResponse.json({ success: false, error: 'Failed to delete transaction' }, { status: 500 });
   }
 }
