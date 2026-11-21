@@ -18,7 +18,7 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'organization_id') THEN
     RAISE EXCEPTION 'Tenant organization_id columns are missing; refusing to create unscoped finance tables';
   END IF;
-END
+END;
 $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_id_organization

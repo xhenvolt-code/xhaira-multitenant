@@ -394,6 +394,7 @@ export async function DELETE(request, { params }) {
   const perm = await requirePermission(request, 'accounts.delete');
   if (perm instanceof NextResponse) return perm;
   const organizationId = perm.auth.organizationId;
+  const force = new URL(request.url).searchParams.get('force') === 'true';
 
   try {
     return await runWithOrganizationContext(organizationId, async () => {
@@ -440,6 +441,45 @@ export async function DELETE(request, { params }) {
           return NextResponse.json({ success: false, error: 'Cannot delete an account with linked salary accounts.' }, { status: 409 });
         }
 
+        const intentDependencies = await client.query(
+          `SELECT COUNT(*) AS total,
+                  COUNT(*) FILTER (WHERE status IN ('created', 'processing', 'review')) AS active
+             FROM payment_intents
+            WHERE settlement_account_id = $1 AND organization_id = $2`,
+          [id, organizationId]
+        );
+        const linkedIntents = Number(intentDependencies.rows[0].total);
+        const activeIntents = Number(intentDependencies.rows[0].active);
+        if (linkedIntents > 0 && !force) {
+          await client.query('ROLLBACK');
+          return NextResponse.json({
+            success: false,
+            requiresForce: true,
+            linkedPaymentIntents: linkedIntents,
+            error: 'This account is linked to MarzPay payment requests. Force deletion will permanently remove those requests.',
+          }, { status: 409 });
+        }
+        if (force && activeIntents > 0) {
+          await client.query('ROLLBACK');
+          return NextResponse.json({
+            success: false,
+            error: `Cannot force-delete this account while ${activeIntents} MarzPay payment request(s) are pending or under review. Resolve them first.`,
+          }, { status: 409 });
+        }
+        if (force && linkedIntents > 0) {
+          await client.query(
+            `DELETE FROM payment_intents
+              WHERE settlement_account_id = $1 AND organization_id = $2`,
+            [id, organizationId]
+          );
+        }
+        await client.query(
+          `DELETE FROM sacco_configurations
+            WHERE organization_id = $1
+              AND config_key IN ('payments.marzpay.settlement_account_id', 'payments.marzpay.reconciliation_account_id')
+              AND config_value = to_jsonb($2::text)`,
+          [organizationId, id]
+        );
         await client.query(
           `DELETE FROM ledger
             WHERE account_id = $1 AND organization_id = $2`,
@@ -458,7 +498,7 @@ export async function DELETE(request, { params }) {
           id,
           'DELETE',
           accountSnapshot(current),
-          null
+          { force, linked_payment_intents_deleted: force ? linkedIntents : 0 }
         );
         await client.query('COMMIT');
         return NextResponse.json({ success: true, data: { id: result.rows[0].id, deleted: true } });

@@ -17,6 +17,8 @@ export default function AccountsPage() {
   const [form, setForm] = useState({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' });
   const [editingAccount, setEditingAccount] = useState(null);
   const [deleteAccount, setDeleteAccount] = useState(null);
+  const [deleteRequiresForce, setDeleteRequiresForce] = useState(false);
+  const [linkedPaymentIntentCount, setLinkedPaymentIntentCount] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -90,17 +92,24 @@ export default function AccountsPage() {
     }
   };
 
-  const confirmDeleteAccount = async () => {
+  const confirmDeleteAccount = async (force = false) => {
     if (!deleteAccount || deleting) return;
     setDeleting(true);
     try {
-      const res = await fetchWithAuth(`/api/accounts/${deleteAccount.id}`, {
+      const res = await fetchWithAuth(`/api/accounts/${deleteAccount.id}${force ? '?force=true' : ''}`, {
         method: 'DELETE',
       });
       const json = await res.json();
+      if (json.requiresForce) {
+        setDeleteRequiresForce(true);
+        setLinkedPaymentIntentCount(json.linkedPaymentIntents || 0);
+        return;
+      }
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to delete account');
       toast.success('Account Deleted');
       setDeleteAccount(null);
+      setDeleteRequiresForce(false);
+      setLinkedPaymentIntentCount(0);
       await fetchAccounts();
     } catch (err) {
       console.error(err);
@@ -267,7 +276,7 @@ export default function AccountsPage() {
                   <Pencil className="h-4 w-4" /> Edit account
                 </button>
 
-                <button type="button" onClick={() => setDeleteAccount(a)} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-red-800 hover:bg-muted">
+                <button type="button" onClick={() => { setDeleteAccount(a); setDeleteRequiresForce(false); setLinkedPaymentIntentCount(0); }} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-red-800 hover:bg-muted">
                   <Trash2 className="h-4 w-4" /> Delete account
                 </button>
               </div>
@@ -280,9 +289,18 @@ export default function AccountsPage() {
           <div role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-md rounded-xl bg-card p-6 shadow-xl">
             <h2 id="delete-account-title" className="text-lg font-semibold text-foreground">Delete {deleteAccount.name}?</h2>
             <p className="mt-2 text-sm text-muted-foreground">This permanently deletes the account and its linked ledger transactions.</p>
+            {deleteRequiresForce && (
+              <div className="mt-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
+                Force deletion will also permanently delete {linkedPaymentIntentCount} linked MarzPay payment request(s) and clear this account from settlement settings. Pending or under-review requests must be resolved first.
+              </div>
+            )}
             <div className="mt-6 flex justify-end gap-3">
-              <button type="button" disabled={deleting} onClick={() => setDeleteAccount(null)} className="rounded-lg border px-4 py-2 text-sm disabled:opacity-50">Cancel</button>
-              <button type="button" disabled={deleting} onClick={confirmDeleteAccount} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete account'}</button>
+              <button type="button" disabled={deleting} onClick={() => { setDeleteAccount(null); setDeleteRequiresForce(false); setLinkedPaymentIntentCount(0); }} className="rounded-lg border px-4 py-2 text-sm disabled:opacity-50">Cancel</button>
+              {deleteRequiresForce ? (
+                <button type="button" disabled={deleting} onClick={() => confirmDeleteAccount(true)} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50">{deleting ? 'Deleting…' : 'Force delete'}</button>
+              ) : (
+                <button type="button" disabled={deleting} onClick={() => confirmDeleteAccount()} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete account'}</button>
+              )}
             </div>
           </div>
         </div>
