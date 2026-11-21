@@ -17,6 +17,7 @@ export function PageTitle() {
   // Map routes to readable titles
   const routeTitles = {
     '/app/dashboard': 'Dashboard',
+    '/app/transactions': 'Ledger Transactions',
     '/app/assets-accounting': 'Accounting Assets',
     '/app/intellectual-property': 'Intellectual Property',
     '/app/infrastructure': 'Infrastructure',
