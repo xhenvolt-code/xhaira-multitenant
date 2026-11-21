@@ -19,8 +19,9 @@ export async function GET(request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset = (page - 1) * limit;
 
-    let where = 'WHERE 1=1';
-    const params = [];
+    const organizationId = perm.auth.organizationId;
+    let where = 'WHERE t.organization_id = $1';
+    const params = [organizationId];
 
     if (type) {
       params.push(type);
@@ -29,12 +30,18 @@ export async function GET(request) {
 
     if (memberAccountId) {
       params.push(memberAccountId);
-      where += ` AND t.id IN (SELECT transaction_id FROM ledger_entries WHERE member_account_id = $${params.length})`;
+      where += ` AND t.id IN (
+        SELECT le.transaction_id FROM ledger_entries le
+         WHERE le.organization_id = $1 AND le.member_account_id = $${params.length}
+      )`;
     }
 
     if (accountId) {
       params.push(accountId);
-      where += ` AND t.id IN (SELECT transaction_id FROM ledger_entries WHERE account_id = $${params.length})`;
+      where += ` AND t.id IN (
+        SELECT le.transaction_id FROM ledger_entries le
+         WHERE le.organization_id = $1 AND le.account_id = $${params.length}
+      )`;
     }
 
     const countParams = [...params];
@@ -49,8 +56,8 @@ export async function GET(request) {
              'description', le.description
            ) ORDER BY le.entry_type) as entries
          FROM transactions t
-         LEFT JOIN users u ON t.created_by = u.id
-         LEFT JOIN ledger_entries le ON le.transaction_id = t.id
+         LEFT JOIN users u ON t.created_by = u.id AND u.organization_id = $1
+         LEFT JOIN ledger_entries le ON le.transaction_id = t.id AND le.organization_id = $1
          ${where}
          GROUP BY t.id, u.email
          ORDER BY t.created_at DESC
