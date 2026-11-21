@@ -15,8 +15,10 @@ export async function GET(request) {
         const result = await client.query(
           `SELECT o.name AS organization_name, COALESCE(cb.contact_phones, '') AS contact_phones,
                   COALESCE(cb.contact_email, '') AS contact_email, COALESCE(cb.website, '') AS website,
-                  COALESCE(cb.address, '') AS address,
-                  COALESCE(cb.use_organization_name_as_app_name, false) AS use_organization_name_as_app_name
+                  COALESCE(cb.address, '') AS address, o.slug AS organization_code,
+                  COALESCE(cb.use_organization_name_as_app_name, false) AS use_organization_name_as_app_name,
+                  COALESCE(cb.sidebar_app_name_mode, CASE WHEN cb.use_organization_name_as_app_name THEN 'organization_name' ELSE 'xhaira' END) AS sidebar_app_name_mode,
+                  COALESCE(cb.logo_url, '') AS logo_url
              FROM public.organizations o
              LEFT JOIN public.company_branding cb ON cb.organization_id = o.id AND cb.is_active = true
             WHERE o.id = $1`, [auth.organizationId]
@@ -44,14 +46,29 @@ export async function PATCH(request) {
     const email = clean(body.contact_email, 254);
     const website = clean(body.website, 500);
     const address = clean(body.address, 1000);
+    const logoUrl = typeof body.logo_url === 'string' ? body.logo_url.trim() : '';
+    const sidebarAppNameMode = ['xhaira', 'organization_name', 'organization_code'].includes(body.sidebar_app_name_mode)
+      ? body.sidebar_app_name_mode
+      : body.use_organization_name_as_app_name === true ? 'organization_name' : 'xhaira';
     if (name.length < 2) return NextResponse.json({ success: false, error: 'Organization name must have at least 2 characters' }, { status: 400 });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ success: false, error: 'Enter a valid organization email' }, { status: 400 });
     if (website) {
       try { const url = new URL(website); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); }
       catch { return NextResponse.json({ success: false, error: 'Website must be a valid http or https URL' }, { status: 400 }); }
     }
-    if (typeof body.use_organization_name_as_app_name !== 'boolean') {
-      return NextResponse.json({ success: false, error: 'Choose whether to show the organization name as the app name' }, { status: 400 });
+    if (logoUrl.length > 1_500_000) {
+      return NextResponse.json({ success: false, error: 'Logo must be 1 MB or smaller' }, { status: 400 });
+    }
+    if (logoUrl) {
+      const dataImage = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/i.test(logoUrl);
+      let remoteImage = false;
+      try {
+        const url = new URL(logoUrl);
+        remoteImage = ['http:', 'https:'].includes(url.protocol);
+      } catch { /* not a remote URL */ }
+      if (!dataImage && !remoteImage) {
+        return NextResponse.json({ success: false, error: 'Logo must be a PNG, JPEG, WebP, or GIF upload, or an http(s) image URL' }, { status: 400 });
+      }
     }
 
     const data = await runWithOrganizationContext(auth.organizationId, async () => {
@@ -64,38 +81,46 @@ export async function PATCH(request) {
           [name, auth.organizationId]
         );
         if (!org.rows[0]) throw new Error('Organization not found');
+        const useOrganizationName = sidebarAppNameMode === 'organization_name';
         const values = [name, phones || null, email || null, website || null, address || null,
-          body.use_organization_name_as_app_name, auth.userId, auth.organizationId, org.rows[0].slug];
+          useOrganizationName, auth.userId, auth.organizationId, org.rows[0].slug, sidebarAppNameMode, logoUrl || null];
         const updated = await client.query(
           `UPDATE public.company_branding
               SET organization_name = $1, contact_phones = $2, contact_email = $3,
                   website = $4, address = $5, use_organization_name_as_app_name = $6,
+                  sidebar_app_name_mode = $10, logo_url = $11,
                   updated_by = $7, updated_at = NOW()
-            WHERE organization_id = $8 AND is_active = true`, values.slice(0, 8)
+            WHERE organization_id = $8 AND is_active = true`, values
         );
         if (!updated.rowCount) {
           const reactivated = await client.query(
             `UPDATE public.company_branding
                 SET organization_name = $1, contact_phones = $2, contact_email = $3,
                     website = $4, address = $5, use_organization_name_as_app_name = $6,
+                    sidebar_app_name_mode = $10, logo_url = $11,
                     updated_by = $7, updated_at = NOW(), is_active = true
               WHERE organization_id = $8 AND organization_slug = $9`, values
           );
           if (reactivated.rowCount) {
             await client.query('COMMIT');
             return { organization_name: name, contact_phones: phones, contact_email: email, website, address,
-              use_organization_name_as_app_name: body.use_organization_name_as_app_name };
+              use_organization_name_as_app_name: useOrganizationName,
+              sidebar_app_name_mode: sidebarAppNameMode, logo_url: logoUrl,
+              organization_code: org.rows[0].slug };
           }
           await client.query(
             `INSERT INTO public.company_branding
                (organization_name, organization_slug, contact_phones, contact_email, website, address,
-                use_organization_name_as_app_name, is_active, updated_by, organization_id)
-             VALUES ($1, $9, $2, $3, $4, $5, $6, true, $7, $8)`, values
+                use_organization_name_as_app_name, is_active, updated_by, organization_id,
+                sidebar_app_name_mode, logo_url)
+             VALUES ($1, $9, $2, $3, $4, $5, $6, true, $7, $8, $10, $11)`, values
           );
         }
         await client.query('COMMIT');
         return { organization_name: name, contact_phones: phones, contact_email: email, website, address,
-          use_organization_name_as_app_name: body.use_organization_name_as_app_name };
+          use_organization_name_as_app_name: useOrganizationName,
+          sidebar_app_name_mode: sidebarAppNameMode, logo_url: logoUrl,
+          organization_code: org.rows[0].slug };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

@@ -73,7 +73,9 @@ export async function GET(request) {
         b.contact_email AS organization_contact_email,
         b.website AS organization_website,
         b.address AS organization_address,
-        b.use_organization_name_as_app_name
+        b.use_organization_name_as_app_name,
+        b.sidebar_app_name_mode,
+        b.logo_url AS organization_logo_url
       FROM users u
       JOIN organizations o ON o.id = u.organization_id
       LEFT JOIN company_branding b
@@ -159,6 +161,8 @@ export async function GET(request) {
               website: user.organization_website || '',
               address: user.organization_address || '',
               use_organization_name_as_app_name: user.use_organization_name_as_app_name === true,
+              sidebar_app_name_mode: user.sidebar_app_name_mode || (user.use_organization_name_as_app_name ? 'organization_name' : 'xhaira'),
+              logo_url: user.organization_logo_url || '',
             },
           },
           email: user.email,

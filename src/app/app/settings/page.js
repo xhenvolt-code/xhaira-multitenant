@@ -16,6 +16,9 @@ export default function SettingsPage() {
     website: '',
     address: '',
     use_organization_name_as_app_name: false,
+    sidebar_app_name_mode: 'xhaira',
+    organization_code: '',
+    logo_url: '',
   });
   const [passwordForm, setPasswordForm] = useState({ current: '', newPass: '', confirm: '' });
   const [saved, setSaved] = useState(false);
@@ -84,6 +87,32 @@ export default function SettingsPage() {
       setOrganizationSaving(false);
     }
   };
+
+  const uploadOrganizationLogo = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+      setOrganizationError('Choose a PNG, JPEG, WebP, or GIF image.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      setOrganizationError('Logo must be 1 MB or smaller.');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setOrganizationForm((formState) => ({ ...formState, logo_url: String(reader.result || '') }));
+    reader.onerror = () => setOrganizationError('Unable to read the selected logo.');
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  };
+
+  const chooseSidebarName = (mode) => setOrganizationForm((formState) => ({
+    ...formState,
+    sidebar_app_name_mode: mode,
+    use_organization_name_as_app_name: mode === 'organization_name',
+  }));
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
@@ -164,19 +193,43 @@ export default function SettingsPage() {
                     className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
                 </div>
               </div>
+              <div className="space-y-3">
+                <label htmlFor="organization-logo" className="block text-sm text-muted-foreground">Sidebar logo</label>
+                <div className="flex items-center gap-3">
+                  {organizationForm.logo_url ? (
+                    <img src={organizationForm.logo_url} alt="Organization logo preview" className="h-12 w-12 rounded-lg border border-border object-contain bg-white p-1" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-lg border border-border bg-muted flex items-center justify-center text-muted-foreground"><Building2 className="h-5 w-5" /></div>
+                  )}
+                  <div className="space-y-2">
+                    <input id="organization-logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={uploadOrganizationLogo}
+                      className="block max-w-full text-xs text-muted-foreground" />
+                    {organizationForm.logo_url && <button type="button" onClick={() => setOrganizationForm(f => ({ ...f, logo_url: '' }))} className="text-xs text-red-600 hover:underline">Remove logo</button>}
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="organization-logo-url" className="block text-xs text-muted-foreground mb-1">Or use an image URL</label>
+                  <input id="organization-logo-url" type="url" maxLength={2048} value={organizationForm.logo_url.startsWith('data:') ? '' : organizationForm.logo_url}
+                    onChange={e => setOrganizationForm(f => ({ ...f, logo_url: e.target.value }))} placeholder="https://example.org/logo.png"
+                    className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground" />
+                </div>
+              </div>
               <fieldset className="space-y-2">
                 <legend className="text-sm font-medium text-foreground">Sidebar app name</legend>
                 <label className="flex items-center gap-2 text-sm text-foreground">
-                  <input type="radio" name="sidebar-app-name" value="xhaira"
-                    checked={!organizationForm.use_organization_name_as_app_name}
-                    onChange={() => setOrganizationForm(f => ({ ...f, use_organization_name_as_app_name: false }))} />
+                  <input type="radio" name="sidebar-app-name" value="xhaira" checked={organizationForm.sidebar_app_name_mode === 'xhaira'}
+                    onChange={() => chooseSidebarName('xhaira')} />
                   Use XHAIRA
                 </label>
                 <label className="flex items-center gap-2 text-sm text-foreground">
-                  <input type="radio" name="sidebar-app-name" value="organization"
-                    checked={organizationForm.use_organization_name_as_app_name}
-                    onChange={() => setOrganizationForm(f => ({ ...f, use_organization_name_as_app_name: true }))} />
+                  <input type="radio" name="sidebar-app-name" value="organization" checked={organizationForm.sidebar_app_name_mode === 'organization_name'}
+                    onChange={() => chooseSidebarName('organization_name')} />
                   Use the organization name
+                </label>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input type="radio" name="sidebar-app-name" value="organization-code" checked={organizationForm.sidebar_app_name_mode === 'organization_code'}
+                    onChange={() => chooseSidebarName('organization_code')} />
+                  Use organization code ({organizationForm.organization_code || 'your organization slug'})
                 </label>
               </fieldset>
             </>

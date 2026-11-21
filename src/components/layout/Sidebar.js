@@ -77,12 +77,20 @@ export default function Sidebar() {
   const [groupRequirement, setGroupRequirement] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
   const quickAddRef = useRef(null);
   const { user: permUser, hasPermission, hasModuleAccess, hasAnyPermission, hierarchyLevel, loading: permLoading } = usePermissions();
   const organizationBranding = permUser?.organization?.branding;
-  const sidebarAppName = organizationBranding?.use_organization_name_as_app_name
-    ? organizationBranding.organization_name || permUser?.organization?.name || 'XHAIRA'
-    : 'XHAIRA';
+  const sidebarNameMode = organizationBranding?.sidebar_app_name_mode
+    || (organizationBranding?.use_organization_name_as_app_name ? 'organization_name' : 'xhaira');
+  const sidebarAppName = sidebarNameMode === 'organization_code'
+    ? organizationBranding?.organization_code || permUser?.organization?.slug || 'XHAIRA'
+    : sidebarNameMode === 'organization_name'
+      ? organizationBranding?.organization_name || permUser?.organization?.name || 'XHAIRA'
+      : 'XHAIRA';
+  const sidebarLogoUrl = organizationBranding?.logo_url || '';
+
+  useEffect(() => setLogoFailed(false), [sidebarLogoUrl]);
 
   useEffect(() => {
     if (!permUser) return;
@@ -185,19 +193,22 @@ export default function Sidebar() {
     >
       {/* Header */}
       <div className="flex items-center justify-between h-16 px-4" style={{ borderBottom: '1px solid var(--sidebar-border)' }}>
-        {!isCollapsed && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex items-center gap-2"
-          >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <span className="text-sm font-bold text-white">X</span>
-            </div>
-            <span className="font-bold text-lg" style={{ color: 'var(--sidebar-text)' }}>{sidebarAppName}</span>
-          </motion.div>
-        )}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex items-center gap-2 overflow-hidden"
+        >
+          <div className="w-8 h-8 shrink-0 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20 overflow-hidden">
+            {sidebarLogoUrl && !logoFailed ? (
+              <img src={sidebarLogoUrl} alt="Organization logo" className="h-full w-full object-contain bg-white" referrerPolicy="no-referrer" onError={() => setLogoFailed(true)} />
+            ) : (
+              <Building2 size={17} className="text-white" aria-hidden="true" />
+            )}
+          </div>
+          {!isCollapsed && (
+            <span className="max-w-[10.5rem] truncate font-bold text-lg" title={sidebarAppName} style={{ color: 'var(--sidebar-text)' }}>{sidebarAppName}</span>
+          )}
+        </motion.div>
         <button
           onClick={toggleCollapse}
           className="p-1.5 hover:bg-[var(--sidebar-hover)] rounded-lg transition-colors ml-auto"
