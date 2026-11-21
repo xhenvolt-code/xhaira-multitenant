@@ -88,7 +88,7 @@ export async function PATCH(request) {
           `UPDATE public.company_branding
               SET organization_name = $1, contact_phones = $2, contact_email = $3,
                   website = $4, address = $5, use_organization_name_as_app_name = $6,
-                  sidebar_app_name_mode = $10, logo_url = $11,
+                  organization_slug = $9, sidebar_app_name_mode = $10, logo_url = $11,
                   updated_by = $7, updated_at = NOW()
             WHERE organization_id = $8 AND is_active = true`, values
         );
