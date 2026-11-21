@@ -136,9 +136,10 @@ export async function GET(request, { params }) {
     });
 
     if (!html) return NextResponse.json({ success: false, error: 'Receipt not found' }, { status: 404 });
+    const shouldDownload = new URL(request.url).searchParams.get('download') === '1';
     return new NextResponse(html, { headers: {
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Disposition': `inline; filename="${normalizedReceipt}.html"`,
+      'Content-Disposition': `${shouldDownload ? 'attachment' : 'inline'}; filename="${normalizedReceipt}.html"`,
       'Cache-Control': 'private, no-store',
     } });
   } catch (error) {

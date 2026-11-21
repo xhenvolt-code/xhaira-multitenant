@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
-import { verifyAuth } from '@/lib/auth-utils.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/budgets
 export async function GET(request) {
@@ -9,6 +9,7 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'budgets', 'view');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
     const result = await query(
       `SELECT b.*,
               b.start_date AS period_start,
@@ -26,6 +27,7 @@ export async function GET(request) {
       [auth.organizationId]
     );
     return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     console.error('[Budgets] GET error:', error.message);
     return NextResponse.json({ success: false, error: 'Failed to fetch budgets' }, { status: 500 });
@@ -35,10 +37,13 @@ export async function GET(request) {
 // POST /api/budgets
 export async function POST(request) {
   try {
-    const auth = await verifyAuth(request);
-    if (!auth) return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    const perm = await requirePermission(request, 'budgets', 'create');
+    if (perm instanceof NextResponse) return perm;
+    const { auth } = perm;
+    if (!auth.organizationId) return NextResponse.json({ success: false, error: 'Organization context required' }, { status: 400 });
+    return await runWithOrganizationContext(auth.organizationId, async () => {
     const body = await request.json();
-    const { name, amount, currency, period, start_date, end_date, alert_threshold, notes } = body;
+    const { name, category = 'other', amount, currency, period, start_date, end_date, alert_threshold, notes } = body;
     if (!name || amount == null || Number(amount) <= 0 || !period || !start_date || !end_date) {
       return NextResponse.json({ success: false, error: 'name, positive amount, period, start_date, and end_date are required' }, { status: 400 });
     }
@@ -48,6 +53,7 @@ export async function POST(request) {
       [name, category || 'other', amount, currency || 'UGX', period, start_date, end_date, alert_threshold ?? 80, notes || null, auth.userId, auth.organizationId]
     );
     return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: 'Failed to create budget' }, { status: 500 });
   }

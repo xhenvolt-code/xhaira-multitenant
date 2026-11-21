@@ -1,28 +1,39 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/ledger — finance.view
 export async function GET(request) {
   const perm = await requirePermission(request, 'finance.view');
   if (perm instanceof NextResponse) return perm;
   try {
+    const { auth } = perm;
+    if (!auth.organizationId) return NextResponse.json({ success: false, error: 'Organization context required' }, { status: 400 });
+    return await runWithOrganizationContext(auth.organizationId, async () => {
     const { searchParams } = new URL(request.url);
     const account_id = searchParams.get('account_id');
-    const source_type = searchParams.get('source_type');
+    const source_type = searchParams.get('source_type') || searchParams.get('type');
     const category = searchParams.get('category');
     const from_date = searchParams.get('from_date');
     const to_date = searchParams.get('to_date');
-    const limit = parseInt(searchParams.get('limit') || '100');
-    const offset = parseInt(searchParams.get('offset') || '0');
-    let sql = `SELECT l.*, a.name as account_name, a.type as account_type FROM ledger l JOIN accounts a ON l.account_id = a.id WHERE 1=1`;
-    const params = [];
+    const limit = Math.min(500, Math.max(1, Number.parseInt(searchParams.get('limit') || '100', 10) || 100));
+    const offset = Math.max(0, Number.parseInt(searchParams.get('offset') || '0', 10) || 0);
+    let sql = `SELECT l.*, a.name as account_name, a.type as account_type FROM ledger l JOIN accounts a ON l.account_id = a.id AND a.organization_id = l.organization_id WHERE l.organization_id = $1`;
+    const params = [auth.organizationId];
     if (account_id) { params.push(account_id); sql += ` AND l.account_id = $${params.length}`; }
     if (source_type) { params.push(source_type); sql += ` AND l.source_type = $${params.length}`; }
     if (category) { params.push(category); sql += ` AND l.category = $${params.length}`; }
     if (from_date) { params.push(from_date); sql += ` AND l.entry_date >= $${params.length}`; }
     if (to_date) { params.push(to_date); sql += ` AND l.entry_date <= $${params.length}`; }
-    const countResult = await query(`SELECT COUNT(*) FROM ledger l WHERE 1=1${account_id ? ` AND l.account_id = '${account_id}'` : ''}`);
+    const countParams = [auth.organizationId];
+    let countSql = `SELECT COUNT(*) FROM ledger l WHERE l.organization_id = $1`;
+    if (account_id) { countParams.push(account_id); countSql += ` AND l.account_id = $${countParams.length}`; }
+    if (source_type) { countParams.push(source_type); countSql += ` AND l.source_type = $${countParams.length}`; }
+    if (category) { countParams.push(category); countSql += ` AND l.category = $${countParams.length}`; }
+    if (from_date) { countParams.push(from_date); countSql += ` AND l.entry_date >= $${countParams.length}`; }
+    if (to_date) { countParams.push(to_date); countSql += ` AND l.entry_date <= $${countParams.length}`; }
+    const countResult = await query(countSql, countParams);
     sql += ` ORDER BY l.entry_date DESC, l.created_at DESC`;
     params.push(limit); sql += ` LIMIT $${params.length}`;
     params.push(offset); sql += ` OFFSET $${params.length}`;
@@ -35,6 +46,7 @@ export async function GET(request) {
       summary: summary.rows[0],
       pagination: { total: parseInt(countResult.rows[0].count), limit, offset },
     });
+    });
   } catch (error) {
     console.error('[Ledger] GET error:', error);
     return NextResponse.json({ success: false, error: 'Failed to fetch ledger' }, { status: 500 });
@@ -46,12 +58,13 @@ export async function POST(request) {
   const perm = await requirePermission(request, 'finance.create');
   if (perm instanceof NextResponse) return perm;
   try {
-    const auth = await verifyAuth(request);
-    if (!auth) return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    const { auth } = perm;
+    if (!auth.organizationId) return NextResponse.json({ success: false, error: 'Organization context required' }, { status: 400 });
     if (auth.role !== 'superadmin' && auth.role !== 'admin') {
       return NextResponse.json({ success: false, error: 'Admin access required for manual ledger entries' }, { status: 403 });
     }
 
+    return await runWithOrganizationContext(auth.organizationId, async () => {
     const body = await request.json();
     const { account_id, amount, currency, description, category, entry_date } = body;
     if (!account_id || !amount || !description) {
@@ -59,15 +72,16 @@ export async function POST(request) {
     }
 
     const result = await query(
-      `INSERT INTO ledger (account_id, amount, currency, source_type, description, category, entry_date, created_by)
-       VALUES ($1,$2,$3,'adjustment',$4,$5,$6,$7) RETURNING *`,
-      [account_id, amount, currency||'UGX', description, category||'adjustment', entry_date||new Date().toISOString().split('T')[0], auth.userId]
+      `INSERT INTO ledger (organization_id, account_id, amount, currency, source_type, description, category, entry_date, created_by)
+       VALUES ($1,$2,$3,$4,'adjustment',$5,$6,$7,$8) RETURNING *`,
+      [auth.organizationId, account_id, amount, currency||'UGX', description, category||'adjustment', entry_date||new Date().toISOString().split('T')[0], auth.userId]
     );
 
     await query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES ($1,$2,$3,$4,$5)`,
       [auth.userId, 'CREATE', 'ledger_adjustment', result.rows[0].id, JSON.stringify({ amount, description })]);
 
     return NextResponse.json({ success: true, data: result.rows[0] }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Ledger] POST error:', error);
     return NextResponse.json({ success: false, error: 'Failed to create ledger entry' }, { status: 500 });

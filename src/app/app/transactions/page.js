@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Receipt, Search, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import Link from 'next/link';
-import Link from 'next/link';
 
 const TYPE_COLORS = {
   deposit: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -162,10 +161,16 @@ export default function TransactionsPage() {
 
                   <div className="px-4 pb-3 flex items-center justify-between gap-3">
                     <span className="text-xs font-mono text-muted-foreground">Receipt: {receiptNumber}</span>
-                    <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
-                      <ExternalLink className="w-3.5 h-3.5" /> Print receipt
-                    </Link>
+                    <div className="flex items-center gap-3">
+                      <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
+                        <ExternalLink className="w-3.5 h-3.5" /> View / print
+                      </Link>
+                      <a href={`/api/receipts/${encodeURIComponent(receiptNumber)}?download=1`}
+                        className="text-xs font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
+                        Download
+                      </a>
+                    </div>
                   </div>
 
                   {/* Expanded entries */}
