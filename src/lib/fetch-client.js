@@ -20,6 +20,9 @@ export async function fetchWithAuth(url, options = {}) {
     // Backward compat: old callers do `.json()` on the result
     if (typeof data === 'object' && data !== null) {
       data.json = () => Promise.resolve(data);
+      // Preserve native Response checks used by callers while returning parsed JSON.
+      data.ok = res.ok;
+      data.status = res.status;
       data._status = res.status;
       data._ok = res.ok;
     }
