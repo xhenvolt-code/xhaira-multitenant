@@ -35,6 +35,9 @@ function errorResponse(error, operation) {
   if (error.code === '23514') {
     return NextResponse.json({ success: false, error: 'The account settings do not satisfy the account requirements.' }, { status: 400 });
   }
+  if (error.code === '23503') {
+    return NextResponse.json({ success: false, error: 'This account is still referenced by other records and cannot be deleted.' }, { status: 409 });
+  }
   return NextResponse.json({ success: false, error: `Failed to ${operation.toLowerCase()} account` }, { status: 500 });
 }
 
@@ -419,11 +422,11 @@ export async function DELETE(request, { params }) {
         );
         if (employeeWallet.rows[0]) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Staff wallets cannot be closed from account management.' }, { status: 409 });
+          return NextResponse.json({ success: false, error: 'Staff wallets cannot be deleted from account management.' }, { status: 409 });
         }
         if (current.is_primary_cash_account) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Assign another primary cash account before closing this account.' }, { status: 409 });
+          return NextResponse.json({ success: false, error: 'Assign another primary cash account before deleting this account.' }, { status: 409 });
         }
 
         const dependencies = await client.query(
@@ -434,12 +437,16 @@ export async function DELETE(request, { params }) {
         );
         if (Number(dependencies.rows[0].count) > 0) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Cannot close an account with linked salary accounts.' }, { status: 409 });
+          return NextResponse.json({ success: false, error: 'Cannot delete an account with linked salary accounts.' }, { status: 409 });
         }
 
+        await client.query(
+          `DELETE FROM ledger
+            WHERE account_id = $1 AND organization_id = $2`,
+          [id, organizationId]
+        );
         const result = await client.query(
-          `UPDATE accounts
-              SET status = 'closed', is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+          `DELETE FROM accounts
             WHERE id = $1 AND organization_id = $2
             RETURNING *`,
           [id, organizationId]
@@ -449,12 +456,12 @@ export async function DELETE(request, { params }) {
           organizationId,
           perm.auth.userId,
           id,
-          'CLOSE',
+          'DELETE',
           accountSnapshot(current),
-          accountSnapshot(result.rows[0])
+          null
         );
         await client.query('COMMIT');
-        return NextResponse.json({ success: true, data: result.rows[0] });
+        return NextResponse.json({ success: true, data: { id: result.rows[0].id, deleted: true } });
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;
@@ -463,6 +470,6 @@ export async function DELETE(request, { params }) {
       }
     });
   } catch (error) {
-    return errorResponse(error, 'close');
+    return errorResponse(error, 'delete');
   }
 }

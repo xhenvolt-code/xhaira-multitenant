@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, Wallet, X, Landmark, Pencil } from 'lucide-react';
+import { Plus, Wallet, X, Landmark, Pencil, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
 import { useToast } from '@/components/ui/Toast';
@@ -16,6 +16,8 @@ export default function AccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' });
   const [editingAccount, setEditingAccount] = useState(null);
+  const [deleteAccount, setDeleteAccount] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -88,6 +90,25 @@ export default function AccountsPage() {
     }
   };
 
+  const confirmDeleteAccount = async () => {
+    if (!deleteAccount || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetchWithAuth(`/api/accounts/${deleteAccount.id}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to delete account');
+      toast.success('Account Deleted');
+      setDeleteAccount(null);
+      await fetchAccounts();
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'Failed to Delete account');
+    } finally {
+      setDeleting(false);
+    }
+  };
   const totalBalance = accounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
 
   return (
@@ -241,11 +262,29 @@ export default function AccountsPage() {
               )}
               <div className={`text-2xl font-bold ${parseFloat(a.balance) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(a.balance)}</div>
               <div className="text-xs text-muted-foreground mt-1">{a.currency} &middot; {a.transaction_count || 0} transactions</div>
-              <button type="button" onClick={() => startEditing(a)} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-foreground hover:bg-muted">
-                <Pencil className="h-4 w-4" /> Edit account
-              </button>
+              <div className={`flex items-center justify-between`}>
+                <button type="button" onClick={() => startEditing(a)} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-foreground hover:bg-muted">
+                  <Pencil className="h-4 w-4" /> Edit account
+                </button>
+
+                <button type="button" onClick={() => setDeleteAccount(a)} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-red-800 hover:bg-muted">
+                  <Trash2 className="h-4 w-4" /> Delete account
+                </button>
+              </div>
             </article>
           ))}
+        </div>
+      )}
+      {deleteAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation">
+          <div role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-md rounded-xl bg-card p-6 shadow-xl">
+            <h2 id="delete-account-title" className="text-lg font-semibold text-foreground">Delete {deleteAccount.name}?</h2>
+            <p className="mt-2 text-sm text-muted-foreground">This permanently deletes the account and its linked ledger transactions.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" disabled={deleting} onClick={() => setDeleteAccount(null)} className="rounded-lg border px-4 py-2 text-sm disabled:opacity-50">Cancel</button>
+              <button type="button" disabled={deleting} onClick={confirmDeleteAccount} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete account'}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
