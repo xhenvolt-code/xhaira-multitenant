@@ -149,10 +149,10 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">
-            {isAdmin ? 'SACCO Dashboard' : `${roleLabel} Dashboard`}
+            {isAdmin ? 'Organization Dashboard' : `${roleLabel} Dashboard`}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {user?.name || user?.email} · {roleLabel} · Xhaira SACCO
+            {user?.name || user?.email} · {roleLabel} · 
           </p>
         </div>
         <div className="text-xs text-muted-foreground">Auto-refreshes every 60s</div>
