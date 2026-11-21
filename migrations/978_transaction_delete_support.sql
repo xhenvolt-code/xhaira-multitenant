@@ -46,6 +46,10 @@ BEGIN
     IF definition = fk.definition THEN
       IF position(' ON UPDATE ' IN definition) > 0 THEN
         definition := regexp_replace(definition, ' ON UPDATE ', ' ON DELETE CASCADE ON UPDATE ');
+      ELSIF position(' NOT DEFERRABLE' IN definition) > 0 THEN
+        definition := regexp_replace(definition, ' NOT DEFERRABLE', ' ON DELETE CASCADE NOT DEFERRABLE');
+      ELSIF position(' DEFERRABLE' IN definition) > 0 THEN
+        definition := regexp_replace(definition, ' DEFERRABLE', ' ON DELETE CASCADE DEFERRABLE');
       ELSE
         definition := definition || ' ON DELETE CASCADE';
       END IF;
