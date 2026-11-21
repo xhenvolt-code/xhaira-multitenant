@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission, buildDataScopeFilter } from '@/lib/permissions.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // ─── Widget fetchers ─────────────────────────────────────────────────────────
 
@@ -206,13 +207,13 @@ async function widgetMonthlyFinancials() {
   } catch { return []; }
 }
 
-async function widgetAdminStats() {
+async function widgetAdminStats({ organizationId }) {
   try {
     const [usersR, staffR, membersR, rolesR] = await Promise.all([
-      query(`SELECT COUNT(*) as count FROM users WHERE is_active = true`),
-      query(`SELECT COUNT(*) as count FROM staff WHERE status = 'active'`),
-      query(`SELECT COUNT(*) as count FROM members WHERE status = 'active'`).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM roles`),
+      query(`SELECT COUNT(*) as count FROM users WHERE organization_id = $1 AND is_active = true`, [organizationId]),
+      query(`SELECT COUNT(*) as count FROM staff WHERE organization_id = $1 AND status = 'active'`, [organizationId]),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM roles WHERE organization_id = $1`, [organizationId]),
     ]);
     return {
       total_users:   parseInt(usersR.rows[0]?.count   || 0),
@@ -225,13 +226,13 @@ async function widgetAdminStats() {
 
 // ─── SACCO Widget Fetchers ───────────────────────────────────────────────────
 
-async function widgetSACCOOverview() {
+async function widgetSACCOOverview({ organizationId }) {
   try {
     const [membersR, activeR, newR, accountsR] = await Promise.all([
-      query(`SELECT COUNT(*) as count FROM members`).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM members WHERE status = 'active'`).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM members WHERE joined_date >= date_trunc('month', NOW())`).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM member_accounts WHERE status = 'active'`).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND joined_date >= date_trunc('month', NOW())`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM member_accounts WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
     ]);
     return {
       total_members:  parseInt(membersR.rows[0]?.count || 0),
@@ -278,13 +279,13 @@ async function widgetSavingsSummary() {
   } catch { return { total_savings: 0, saving_members: 0, total_shares: 0 }; }
 }
 
-async function widgetRecentTransactions() {
+async function widgetRecentTransactions({ organizationId }) {
   try {
     const { rows } = await query(`
       SELECT t.id, t.type, t.description, t.amount, t.currency, t.created_at
-      FROM transactions t
+      FROM transactions t WHERE t.organization_id = $1
       ORDER BY t.created_at DESC LIMIT 8
-    `).catch(() => ({ rows: [] }));
+    `, [organizationId]).catch(() => ({ rows: [] }));
     return rows;
   } catch { return []; }
 }
@@ -351,6 +352,7 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'dashboard.view');
     if (perm instanceof NextResponse) return perm;
     const { auth, dataScope, departmentId } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
     const { userId } = auth;
 
     // 1. Load user's permissions (for widget selection)
@@ -390,7 +392,7 @@ export async function GET(request) {
     });
 
     // 4. Fetch data for each widget in parallel
-    const scopeCtx = { userId, dataScope: dataScope ?? 'GLOBAL', departmentId };
+    const scopeCtx = { userId, organizationId: auth.organizationId, dataScope: dataScope ?? 'GLOBAL', departmentId };
     const widgetDataEntries = await Promise.allSettled(
       allowableWidgets.map(async (w) => {
         const fetcher = WIDGET_FETCHERS[w.id];
@@ -418,6 +420,7 @@ export async function GET(request) {
           role: auth.role,
         },
       },
+    });
     });
   } catch (error) {
     console.error('[Dashboard API] Error:', error.message);

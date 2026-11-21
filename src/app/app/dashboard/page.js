@@ -19,6 +19,7 @@ import {
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
 import { usePermissions } from '@/components/providers/PermissionProvider';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import Link from 'next/link';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -97,19 +98,20 @@ export default function DashboardPage() {
     return hasPermission(perm) || hasModuleAccess(perm.split('.')[0]);
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const res  = await fetchWithAuth('/api/dashboard');
-        const json = await res.json();
-        if (json.success) setData(json.data);
-      } catch (err) {
-        console.error('Dashboard fetch failed:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const fetchData = async () => {
+    try {
+      const res = await fetchWithAuth('/api/dashboard', { cache: 'no-store' });
+      const json = await res.json();
+      if (json.success) setData(json.data);
+    } catch (err) {
+      console.error('Dashboard fetch failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useApiRefresh(fetchData);
 
+  useEffect(() => {
     if (!permLoading) {
       fetchData();
       const interval = setInterval(fetchData, 60000);

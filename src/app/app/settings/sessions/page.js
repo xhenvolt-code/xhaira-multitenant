@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Monitor, Smartphone, Tablet, Laptop, Globe, MapPin, Clock, LogOut, Shield, RefreshCw, AlertCircle } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import { useToast } from '@/components/ui/Toast';
 
 function timeAgo(dateStr) {
@@ -36,6 +37,7 @@ export default function SessionsPage() {
     } catch { toast.error('Failed to load sessions'); }
     finally { setLoading(false); }
   }, []);
+  useApiRefresh(load);
 
   useEffect(() => { load(); }, [load]);
 

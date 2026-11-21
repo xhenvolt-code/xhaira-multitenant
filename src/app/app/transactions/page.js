@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Receipt, Search, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import Link from 'next/link';
 
 const TYPE_COLORS = {
@@ -64,6 +65,7 @@ export default function TransactionsPage() {
       setLoading(false);
     }
   };
+  useApiRefresh(fetchTransactions);
 
   useEffect(() => { fetchTransactions(); }, [page, typeFilter]);
 

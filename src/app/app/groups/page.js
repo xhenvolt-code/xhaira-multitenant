@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Users, Plus, UserPlus, X, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
 import GroupMemberPicker from '@/components/groups/GroupMemberPicker';
 import { useToast } from '@/components/ui/Toast';
@@ -40,6 +41,7 @@ export default function GroupsPage() {
       setLoading(false);
     }
   }, []);
+  useApiRefresh(loadGroups);
 
   useEffect(() => { loadGroups(); }, [loadGroups]);
   useEffect(() => {

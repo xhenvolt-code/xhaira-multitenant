@@ -7,6 +7,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { fetchWithAuth }   from '@/lib/fetch-client';
+import { useApiRefresh }   from '@/lib/use-api-refresh';
 import { formatCurrency }  from '@/lib/format-currency';
 import { usePermissions }  from '@/components/providers/PermissionProvider';
 import Link                from 'next/link';
@@ -35,7 +36,6 @@ function PurchaseModal({ onClose, onSuccess }) {
       .then(d => setMembers(d.data || []))
       .catch(() => {});
   }, []);
-
   useEffect(() => {
     if (!memberId) return;
     fetchWithAuth(`/api/members/${memberId}/accounts`)
@@ -205,6 +205,7 @@ export default function SharesPage() {
       setLoading(false);
     }
   }, []);
+  useApiRefresh(load);
 
   useEffect(() => { load(); }, [load]);
 

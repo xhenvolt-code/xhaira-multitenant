@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/ui/Toast';
 import { confirmDelete } from '@/lib/confirm';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 
 const STATUS_BADGE = {
   completed:   'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -81,6 +82,7 @@ export default function AdminBackupsPage() {
       if (j.success) setJobs(j.data || []);
     } finally { setLoading(false); }
   }, []);
+  useApiRefresh(refreshAll);
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 

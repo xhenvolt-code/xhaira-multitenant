@@ -421,13 +421,13 @@ export async function DELETE(request, { params }) {
             LIMIT 1`,
           [id, organizationId]
         );
-        if (employeeWallet.rows[0]) {
+        if (employeeWallet.rows[0] && !force) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Staff wallets cannot be deleted from account management.' }, { status: 409 });
+          return NextResponse.json({ success: false, requiresForce: true, error: 'This account is linked to a staff wallet.' }, { status: 409 });
         }
-        if (current.is_primary_cash_account) {
+        if (current.is_primary_cash_account && !force) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Assign another primary cash account before deleting this account.' }, { status: 409 });
+          return NextResponse.json({ success: false, requiresForce: true, error: 'This is the primary deposits and withdrawals account.' }, { status: 409 });
         }
 
         const dependencies = await client.query(
@@ -436,9 +436,9 @@ export async function DELETE(request, { params }) {
             WHERE account_id = $1 AND organization_id = $2`,
           [id, organizationId]
         );
-        if (Number(dependencies.rows[0].count) > 0) {
+        if (Number(dependencies.rows[0].count) > 0 && !force) {
           await client.query('ROLLBACK');
-          return NextResponse.json({ success: false, error: 'Cannot delete an account with linked salary accounts.' }, { status: 409 });
+          return NextResponse.json({ success: false, requiresForce: true, error: 'This account is linked to salary accounts.' }, { status: 409 });
         }
 
         const intentDependencies = await client.query(
@@ -510,6 +510,13 @@ export async function DELETE(request, { params }) {
       }
     });
   } catch (error) {
+    if (error.code === '23503' && !force) {
+      return NextResponse.json({
+        success: false,
+        requiresForce: true,
+        error: 'This account is referenced by other records. Force deletion will permanently delete those linked records.',
+      }, { status: 409 });
+    }
     return errorResponse(error, 'delete');
   }
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { getPool } from '@/lib/db.js';
+import { getMemberAccountBalance } from '@/lib/transaction-service.js';
 import { syncMobileMoneyIntent } from '@/lib/payment-collection-service.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
@@ -21,7 +22,7 @@ export async function GET(request, { params }) {
 
     const sync = await syncMobileMoneyIntent(intentId);
     const result = await pool.query(
-      `      SELECT id, direction, amount_minor, provider_amount_minor, provider_fee_minor, provider_fee_confirmed, ledger_amount_minor,
+      `      SELECT id, direction, member_account_id, amount_minor, provider_amount_minor, provider_fee_minor, provider_fee_confirmed, ledger_amount_minor,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
               ledger_status, reconciliation_status, reconciliation_error,
               reconciliation_adjustment_transaction_id, ledger_failure_reason,
@@ -29,6 +30,10 @@ export async function GET(request, { params }) {
          FROM payment_intents WHERE id = $1`,
       [intentId]
     );
-    return NextResponse.json({ success: true, data: result.rows[0], reconciliationError: sync.error });
+    const intent = result.rows[0];
+    const balance = intent?.ledger_status === 'posted'
+      ? await getMemberAccountBalance(intent.member_account_id)
+      : null;
+    return NextResponse.json({ success: true, data: { ...intent, balance }, reconciliationError: sync.error });
   });
 }

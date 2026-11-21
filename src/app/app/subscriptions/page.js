@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Plus, Search, RefreshCw, XCircle, Eye, Calendar, CreditCard, Building2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import Link from 'next/link';
 
 const fmtCurrency = (amount, currency = 'UGX') =>
@@ -30,7 +31,6 @@ function NewSubscriptionModal({ onClose, onCreated }) {
     fetchWithAuth('/api/clients?limit=200').then(r => r.json()).then(j => { if (j.success) setClients(j.data); });
     fetchWithAuth('/api/pricing?active=true&limit=200').then(r => r.json()).then(j => { if (j.success) setPlans(j.data); });
   }, []);
-
   const handlePlanChange = planId => {
     setForm(f => ({ ...f, plan_id: planId, pricing_cycle_id: '' }));
     const plan = plans.find(p => p.id === planId);
@@ -140,6 +140,7 @@ export default function SubscriptionsPage() {
     } catch { setError('Network error'); }
     finally { setLoading(false); }
   }, [statusFilter, systemFilter, page]);
+  useApiRefresh(fetchSubs);
 
   useEffect(() => { fetchSubs(); }, [fetchSubs]);
 

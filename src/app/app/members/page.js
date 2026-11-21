@@ -7,6 +7,7 @@ import { formatCurrency as fmtCurrency } from '@/lib/format-currency';
 import Link from 'next/link';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
 import { useMembersData } from './members-data-context';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 
 const STATUS_STYLES = {
   active: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -99,6 +100,8 @@ export default function MembersPage() {
       if (requestId === membersRequestId.current) setLoading(false);
     }
   };
+
+  useApiRefresh(() => (activeView === 'members' ? fetchMembers() : fetchGroups()));
 
   useEffect(() => {
     if (activeView === 'members') fetchMembers();

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Activity, Users, UserCheck, UserX, Shield, AlertTriangle, CheckCircle, RefreshCw, Wrench } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 
 function StatCard({ label, value, color = 'text-foreground', sub }) {
   return (
@@ -55,6 +56,7 @@ export default function DebugPage() {
       setLoading(false);
     }
   }, []);
+  useApiRefresh(load);
 
   useEffect(() => { load(); }, [load]);
 

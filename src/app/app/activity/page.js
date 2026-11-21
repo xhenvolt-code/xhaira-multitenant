@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import {
   Activity, Monitor, Briefcase, CheckCircle, DollarSign,
   AlertCircle, Key, UserPlus, Wrench, RefreshCw, Filter,
@@ -89,6 +90,7 @@ export default function ActivityPage() {
       setRefreshing(false);
     }
   }, [filter]);
+  useApiRefresh(() => load(1, filter, true));
 
   useEffect(() => { load(1, filter); }, [filter]);
 

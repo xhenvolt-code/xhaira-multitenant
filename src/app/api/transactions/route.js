@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
-import { createTransaction, deposit, withdraw } from '@/lib/transaction-service.js';
+import { createTransaction, deposit, withdraw, getMemberAccountBalance } from '@/lib/transaction-service.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/transactions — List transactions with pagination
@@ -132,7 +132,26 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Specify action (deposit/withdraw) or provide entries array' }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, data: result }, { status: 201 });
+    const memberAccountIds = [...new Set(
+      (action === 'deposit' || action === 'withdraw'
+        ? [member_account_id]
+        : (entries || []).map((entry) => entry.member_account_id)
+      ).filter(Boolean)
+    )];
+    const balances = Object.fromEntries(await Promise.all(
+      memberAccountIds.map(async (memberAccountId) => [
+        memberAccountId,
+        await getMemberAccountBalance(memberAccountId),
+      ])
+    ));
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...result,
+        balances,
+        ...(memberAccountIds.length === 1 ? { balance: balances[memberAccountIds[0]] } : {}),
+      },
+    }, { status: 201 });
     });
   } catch (error) {
     console.error('[Transactions] POST error:', error.message);

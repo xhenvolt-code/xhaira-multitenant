@@ -6,6 +6,8 @@ import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
+import Swal from 'sweetalert2';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 
 const TYPE_COLORS = { bank: 'bg-blue-100 text-blue-700', savings: 'bg-emerald-100 text-emerald-700', cash: 'bg-yellow-100 text-yellow-700', mobile_money: 'bg-purple-100 text-purple-700', credit_card: 'bg-pink-100 text-pink-700', investment: 'bg-cyan-100 text-cyan-700', internal: 'bg-orange-100 text-orange-700', salary: 'bg-teal-100 text-teal-700', escrow: 'bg-indigo-100 text-indigo-700', system: 'bg-violet-100 text-violet-700', other: 'bg-muted text-foreground' };
 const ACCOUNT_TYPES = ['cash','mobile_money','bank','savings','credit_card','investment','internal','salary','escrow','system','other'];
@@ -16,10 +18,7 @@ export default function AccountsPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'cash', currency: 'UGX', initial_balance: '', institution: '', account_number: '', description: '' });
   const [editingAccount, setEditingAccount] = useState(null);
-  const [deleteAccount, setDeleteAccount] = useState(null);
-  const [deleteRequiresForce, setDeleteRequiresForce] = useState(false);
-  const [linkedPaymentIntentCount, setLinkedPaymentIntentCount] = useState(0);
-  const [deleting, setDeleting] = useState(false);
+  const [deletingAccountId, setDeletingAccountId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -36,6 +35,7 @@ export default function AccountsPage() {
       else setLoadError(json.error || 'Failed to load accounts');
     } catch (err) { console.error(err); setLoadError(err.message || 'Failed to load accounts'); } finally { setLoading(false); }
   };
+  useApiRefresh(fetchAccounts);
 
   const submit = async (e) => {
     e.preventDefault(); setSaving(true);
@@ -92,30 +92,35 @@ export default function AccountsPage() {
     }
   };
 
-  const confirmDeleteAccount = async (force = false) => {
-    if (!deleteAccount || deleting) return;
-    setDeleting(true);
+  const confirmDeleteAccount = async (account) => {
+    if (!account || deletingAccountId) return;
+    const confirmation = await Swal.fire({
+      title: `Force delete ${account.name}?`,
+      text: 'This permanently deletes the account, its ledger transactions, and all database records linked to them. Audit history is retained. Active MarzPay requests must be resolved first.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Force delete account',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#dc2626',
+      reverseButtons: true,
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setDeletingAccountId(account.id);
     try {
-      const res = await fetchWithAuth(`/api/accounts/${deleteAccount.id}${force ? '?force=true' : ''}`, {
+      const res = await fetchWithAuth(`/api/accounts/${account.id}?force=true`, {
         method: 'DELETE',
       });
       const json = await res.json();
-      if (json.requiresForce) {
-        setDeleteRequiresForce(true);
-        setLinkedPaymentIntentCount(json.linkedPaymentIntents || 0);
-        return;
-      }
+      if (json.requiresForce) throw new Error(json.error || 'Force deletion is required.');
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to delete account');
-      toast.success('Account Deleted');
-      setDeleteAccount(null);
-      setDeleteRequiresForce(false);
-      setLinkedPaymentIntentCount(0);
       await fetchAccounts();
+      toast.success('Account and linked records deleted');
     } catch (err) {
       console.error(err);
-      toast.error(err.message || 'Failed to Delete account');
+      toast.error(err.message || 'Failed to force delete account');
     } finally {
-      setDeleting(false);
+      setDeletingAccountId(null);
     }
   };
   const totalBalance = accounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
@@ -276,33 +281,12 @@ export default function AccountsPage() {
                   <Pencil className="h-4 w-4" /> Edit account
                 </button>
 
-                <button type="button" onClick={() => { setDeleteAccount(a); setDeleteRequiresForce(false); setLinkedPaymentIntentCount(0); }} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-red-800 hover:bg-muted">
-                  <Trash2 className="h-4 w-4" /> Delete account
+                <button type="button" disabled={deletingAccountId === a.id} onClick={() => confirmDeleteAccount(a)} className="mt-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium text-red-800 hover:bg-muted disabled:opacity-50">
+                  <Trash2 className="h-4 w-4" /> {deletingAccountId === a.id ? 'Deleting…' : 'Delete account'}
                 </button>
               </div>
             </article>
           ))}
-        </div>
-      )}
-      {deleteAccount && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation">
-          <div role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-md rounded-xl bg-card p-6 shadow-xl">
-            <h2 id="delete-account-title" className="text-lg font-semibold text-foreground">Delete {deleteAccount.name}?</h2>
-            <p className="mt-2 text-sm text-muted-foreground">This permanently deletes the account and its linked ledger transactions.</p>
-            {deleteRequiresForce && (
-              <div className="mt-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
-                Force deletion will also permanently delete {linkedPaymentIntentCount} linked MarzPay payment request(s) and clear this account from settlement settings. Pending or under-review requests must be resolved first.
-              </div>
-            )}
-            <div className="mt-6 flex justify-end gap-3">
-              <button type="button" disabled={deleting} onClick={() => { setDeleteAccount(null); setDeleteRequiresForce(false); setLinkedPaymentIntentCount(0); }} className="rounded-lg border px-4 py-2 text-sm disabled:opacity-50">Cancel</button>
-              {deleteRequiresForce ? (
-                <button type="button" disabled={deleting} onClick={() => confirmDeleteAccount(true)} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50">{deleting ? 'Deleting…' : 'Force delete'}</button>
-              ) : (
-                <button type="button" disabled={deleting} onClick={() => confirmDeleteAccount()} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete account'}</button>
-              )}
-            </div>
-          </div>
         </div>
       )}
     </div>

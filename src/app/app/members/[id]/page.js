@@ -10,6 +10,7 @@ import {
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useMembersData } from '../members-data-context';
 import { useToast } from '@/components/ui/Toast';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link from 'next/link';
 
@@ -117,6 +118,16 @@ export default function MemberDetailPage() {
     } finally {
       if (requestId === accountsRequestId.current) setAccountsLoading(false);
     }
+  };
+
+  const applyAccountBalance = (memberAccountId, balance) => {
+    if (balance === null || balance === undefined || !Number.isFinite(Number(balance))) {
+      void fetchAccounts();
+      return;
+    }
+    setAccounts(current => current.map(account => (account.member_account_id || account.id) === memberAccountId
+      ? { ...account, balance: Number(balance), transaction_count: Number(account.transaction_count || 0) + 1 }
+      : account));
   };
 
   const fetchData = async ({ refreshMember = false } = {}) => {
@@ -351,7 +362,7 @@ export default function MemberDetailPage() {
         setTxModal(null);
         setTxAmount('');
         setTxDescription('');
-        fetchAccounts();
+        applyAccountBalance(txModal.accountId, json.balance);
         if (selectedAccount === txModal.accountId) fetchLedger(txModal.accountId);
       } else {
         toast.error(json.error || 'Transaction failed');
@@ -374,6 +385,11 @@ export default function MemberDetailPage() {
       setLedger([]);
     }
   };
+
+  useApiRefresh(() => {
+    void fetchData({ refreshMember: true });
+    if (activeTab === 'Audit Trail') void fetchAuditLog();
+  });
 
   if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
   if (!member) return <div className="p-6 text-center text-muted-foreground">
@@ -967,7 +983,7 @@ export default function MemberDetailPage() {
           account={{ memberAccountId: txModeModal.accountId, label: `${member?.full_name || 'Member'} · ${txModeModal.account.account_number || ''}`, balance: txModeModal.account.balance }}
           onClose={() => setTxModeModal(null)}
           onManual={(paymentMethod) => { setTxModeModal(null); setTxModal({ action: txModeModal.action, accountId: txModeModal.accountId, accountNumber: txModeModal.account.account_number, paymentMethod }); }}
-          onSuccess={() => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); setTxModeModal(null); fetchAccounts(); fetchLedger(txModeModal.accountId); }}
+          onSuccess={(data) => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); applyAccountBalance(txModeModal.accountId, data?.balance); setTxModeModal(null); fetchLedger(txModeModal.accountId); }}
         />
       )}
       {txModal && (

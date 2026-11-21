@@ -58,6 +58,7 @@ export async function PATCH(request) {
       const client = await getPool().connect();
       try {
         await client.query('BEGIN');
+        await client.query("SELECT set_config('app.organization_id', $1, true)", [auth.organizationId]);
         const org = await client.query(
           'UPDATE public.organizations SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING slug',
           [name, auth.organizationId]

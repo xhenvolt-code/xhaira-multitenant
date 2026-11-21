@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { usePermissions } from '@/components/providers/PermissionProvider';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { useApiRefresh } from '@/lib/use-api-refresh';
 
 // ─── Authority Level colour mapping ────────────────────────────────────────
 function authorityColor(level) {
@@ -76,6 +77,7 @@ export default function AuthorityInspectorPage() {
       setLoading(false);
     }
   }, []);
+  useApiRefresh(load);
 
   useEffect(() => { load(); }, [load]);
 

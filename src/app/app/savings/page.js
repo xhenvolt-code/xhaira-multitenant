@@ -7,6 +7,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { fetchWithAuth }     from '@/lib/fetch-client';
+import { useApiRefresh }     from '@/lib/use-api-refresh';
 import { formatCurrency }    from '@/lib/format-currency';
 import { usePermissions }    from '@/components/providers/PermissionProvider';
 import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
@@ -195,6 +196,7 @@ export default function SavingsPage() {
       setLoading(false);
     }
   }, []);
+  useApiRefresh(() => load(page));
 
   useEffect(() => { load(page); }, [load, page]);
 
@@ -214,11 +216,27 @@ export default function SavingsPage() {
 
   function handleSuccess(data) {
     showToast(`${modal.action} successful — new balance: ${fmtUGX(data.balance)}`, 'success');
+    const memberAccountId = modal?.account?.member_account_id;
+    if (memberAccountId && Number.isFinite(Number(data.balance))) {
+      setAccounts(current => current.map(account => account.member_account_id === memberAccountId
+        ? { ...account, balance: Number(data.balance), transaction_count: Number(account.transaction_count || 0) + 1 }
+        : account));
+    }
     if (data.transaction?.id) {
       setReceiptNumber(data.transaction.receipt_number || `RCP-${String(data.transaction.id).replace(/-/g, '').toUpperCase()}`);
     }
     setModal(null);
-    load(page);
+  }
+
+  function handleMobileSuccess(data) {
+    const memberAccountId = modeModal?.account?.member_account_id;
+    if (memberAccountId && Number.isFinite(Number(data?.balance))) {
+      setAccounts(current => current.map(account => account.member_account_id === memberAccountId
+        ? { ...account, balance: Number(data.balance), transaction_count: Number(account.transaction_count || 0) + 1 }
+        : account));
+    }
+    showToast(`${modeModal?.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`, 'success');
+    setModeModal(null);
   }
 
   const filtered = accounts.filter(a =>
@@ -385,7 +403,7 @@ export default function SavingsPage() {
           account={{ memberAccountId: modeModal.account.member_account_id, label: `${modeModal.account.full_name} · ${modeModal.account.account_type_name}`, balance: modeModal.account.balance, allowsWithdrawal: modeModal.account.allows_withdrawal }}
           onClose={() => setModeModal(null)}
           onManual={(paymentMethod) => { setModeModal(null); setModal({ ...modeModal, paymentMethod }); }}
-          onSuccess={() => { showToast(`${modeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`, 'success'); setModeModal(null); load(page); }}
+          onSuccess={handleMobileSuccess}
         />
       )}
       {modal && (

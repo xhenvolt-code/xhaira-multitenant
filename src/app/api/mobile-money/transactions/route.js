@@ -6,6 +6,7 @@ import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js
 import { createMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
 import { isDatabaseConnectionError } from '@/lib/db.js';
 import { getMarzpaySettlementAccount } from '@/lib/payments/settlement-account.js';
+import { getMemberAccountBalance } from '@/lib/transaction-service.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 export const runtime = 'nodejs';
@@ -62,7 +63,7 @@ export async function POST(request) {
     callbackUrl: callbackUrl(),
   };
   try {
-  const { result, intentDetails } = await runWithOrganizationContext(permission.auth.organizationId, async () => {
+  const { result, intentDetails, balance } = await runWithOrganizationContext(permission.auth.organizationId, async () => {
     const result = action === 'deposit'
       ? await createMobileMoneyCollection(input)
       : await createMobileMoneyDisbursement(input);
@@ -75,14 +76,17 @@ export async function POST(request) {
         [result.id]
       )).rows[0]
       : null;
-    return { result, intentDetails };
+    const balance = intentDetails?.status === 'settled' && intentDetails.ledger_status === 'posted'
+      ? await getMemberAccountBalance(input.memberAccountId)
+      : null;
+    return { result, intentDetails, balance };
   });
 
   // A transport timeout can leave the provider outcome unknown. Keep the
   // intent visible so the UI polls and reconciles instead of asking for retry.
   if (!result.ok && result.status === 202 && result.id) {
     return NextResponse.json({
-      success: true, id: result.id, status: intentDetails?.status || result.state,
+      success: true, id: result.id, status: intentDetails?.status || result.state, balance,
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
       provider_fee_minor: intentDetails?.provider_fee_minor,
@@ -106,7 +110,7 @@ export async function POST(request) {
   }
   return NextResponse.json(
     {
-      success: true, id: result.id, status: intentDetails?.status || result.status,
+      success: true, id: result.id, status: intentDetails?.status || result.status, balance,
       provider_status: intentDetails?.provider_status,
       provider_amount_minor: intentDetails?.provider_amount_minor,
       provider_fee_minor: intentDetails?.provider_fee_minor,
