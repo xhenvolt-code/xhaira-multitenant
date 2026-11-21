@@ -35,12 +35,21 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   const email = organization.contact_email || '';
   const address = organization.address || '';
   const website = organization.website || '';
+  const logoUrl = String(organization.logo_url || '');
+  const isUploadedImage = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/i.test(logoUrl);
+  let isRemoteImage = false;
+  try {
+    isRemoteImage = ['http:', 'https:'].includes(new URL(logoUrl).protocol);
+  } catch { /* no organization logo set */ }
+  const logo = isUploadedImage || isRemoteImage
+    ? `<img class="org-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(organization.organization_name || 'Organization')} logo">`
+    : '';
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Receipt ${escapeHtml(receiptNumber)}</title><style>
   *{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;max-width:780px;margin:32px auto;padding:24px;background:#fff}
   header{border-bottom:2px solid #172033;padding-bottom:18px;margin-bottom:24px;display:flex;justify-content:space-between;gap:20px}
-  h1{font-size:24px;margin:0 0 7px}.muted{color:#64748b;font-size:13px;line-height:1.6}.receipt{text-align:right}.receipt strong{font-size:22px;display:block;color:#047857}
+  h1{font-size:24px;margin:0 0 7px}.org-logo{display:block;max-width:180px;max-height:64px;object-fit:contain;margin:0 0 12px}.muted{color:#64748b;font-size:13px;line-height:1.6}.receipt{text-align:right}.receipt strong{font-size:22px;display:block;color:#047857}
   .summary{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;margin:24px 0}.summary div{font-size:14px}.summary span{display:block;color:#64748b;font-size:11px;text-transform:uppercase;margin-bottom:3px}
   table{width:100%;border-collapse:collapse;margin:22px 0}th{text-align:left;background:#f1f5f9;font-size:11px;text-transform:uppercase;color:#475569}th,td{padding:11px 9px;border-bottom:1px solid #e2e8f0;font-size:13px}.amount{text-align:right;white-space:nowrap}
   .total{margin-left:auto;width:280px;display:flex;justify-content:space-between;padding:14px 0;border-top:2px solid #172033;font-weight:bold;font-size:17px}
@@ -48,7 +57,7 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   button{background:#047857;color:#fff;border:0;padding:10px 16px;border-radius:7px;font-weight:bold;cursor:pointer}@media print{body{margin:0 auto;padding:10px}.actions{display:none}}
   @media(max-width:600px){body{margin:8px;padding:14px}header{display:block}.receipt{text-align:left;margin-top:16px}.summary{grid-template-columns:1fr}}
   </style></head><body><div class="actions"><button onclick="window.print()">Print / Save PDF</button></div>
-  <header><div><h1>${escapeHtml(organization.organization_name || 'Organization')}</h1>
+  <header><div>${logo}<h1>${escapeHtml(organization.organization_name || 'Organization')}</h1>
   ${address ? `<div class="muted">${escapeHtml(address)}</div>` : ''}${phone ? `<div class="muted">${escapeHtml(phone)}</div>` : ''}
   ${email ? `<div class="muted">${escapeHtml(email)}</div>` : ''}${website ? `<div class="muted">${escapeHtml(website)}</div>` : ''}
   </div><div class="receipt"><strong>RECEIPT</strong><span>${escapeHtml(receiptNumber)}</span></div></header>
@@ -77,7 +86,7 @@ export async function GET(request, { params }) {
       const transactionResult = await query(
         `SELECT t.id, COALESCE(t.receipt_number, 'RCP-' || UPPER(REPLACE(t.id::TEXT, '-', ''))) AS receipt_number,
                 t.transaction_type, t.description, t.reference, t.metadata, t.created_at, u.name AS creator_name,
-                o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address
+                o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address, cb.logo_url
            FROM public.transactions t
            LEFT JOIN public.users u ON u.id = t.created_by AND u.organization_id = t.organization_id
            JOIN public.organizations o ON o.id = t.organization_id
@@ -118,7 +127,7 @@ export async function GET(request, { params }) {
         `SELECT l.id, COALESCE(l.receipt_number, 'RCP-' || UPPER(REPLACE(COALESCE(l.source_id, l.id)::TEXT, '-', ''))) AS receipt_number,
                 l.source_type, l.description, l.amount, l.currency, l.created_at, l.source_id,
                 a.name AS account_name, u.name AS creator_name,
-                o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address
+                o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address, cb.logo_url
            FROM public.ledger l
            JOIN public.accounts a ON a.id = l.account_id AND a.organization_id = l.organization_id
            LEFT JOIN public.users u ON u.id = l.created_by AND u.organization_id = l.organization_id
