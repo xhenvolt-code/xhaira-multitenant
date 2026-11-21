@@ -174,6 +174,7 @@ export default function SavingsPage() {
   const [modal,     setModal]     = useState(null); // { account, action }
   const [modeModal, setModeModal] = useState(null);
   const [toast,     setToast]     = useState(null);
+  const [receiptNumber, setReceiptNumber] = useState('');
   const [behaviors, setBehaviors] = useState({});   // { [member_account_id]: behavior }
 
   const showToast = (message, type = 'success') => {
@@ -213,6 +214,9 @@ export default function SavingsPage() {
 
   function handleSuccess(data) {
     showToast(`${modal.action} successful — new balance: ${fmtUGX(data.balance)}`, 'success');
+    if (data.transaction?.id) {
+      setReceiptNumber(data.transaction.receipt_number || `RCP-${String(data.transaction.id).replace(/-/g, '').toUpperCase()}`);
+    }
     setModal(null);
     load(page);
   }
@@ -392,6 +396,13 @@ export default function SavingsPage() {
           onClose={() => setModal(null)}
           onSuccess={handleSuccess}
         />
+      )}
+
+      {receiptNumber && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <span>Transaction recorded. Receipt {receiptNumber}</span>
+          <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer" className="font-semibold underline">Print receipt</Link>
+        </div>
       )}
 
       {/* Toast */}

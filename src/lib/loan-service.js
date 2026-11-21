@@ -371,6 +371,7 @@ export async function disburseLoan({ loanId, amount, userId }) {
       total_disbursed: newDisbursed,
       remaining: approvedAmt - newDisbursed,
       transactionId: result.transaction.id,
+      receiptNumber: result.transaction.receipt_number,
     };
   } catch (err) {
     if (client) client.release();
@@ -453,6 +454,7 @@ export async function repayLoan({ loanId, amount, userId }) {
       remaining: parseFloat(l.total_payable) - newTotalPaid,
       status: isComplete ? 'COMPLETED' : 'ACTIVE',
       transactionId: result.transaction.id,
+      receiptNumber: result.transaction.receipt_number,
     };
   } catch (err) {
     if (client) client.release();

@@ -33,6 +33,7 @@ export default function LoanDetailPage() {
   const [repaying, setRepaying] = useState(false);
   const [disburseAmount, setDisburseAmount] = useState('');
   const [disbursing, setDisbursing] = useState(false);
+  const [receiptNumber, setReceiptNumber] = useState('');
 
   const fetchLoan = async () => {
     try {
@@ -56,6 +57,8 @@ export default function LoanDetailPage() {
       const res = await fetchWithAuth(`/api/loans/${id}/${action}`, opts);
       const json = await res.json();
       if (json.success) {
+        const transactionId = json.data?.transactionId || json.data?.transaction?.id;
+        if (transactionId) setReceiptNumber(json.data?.receiptNumber || `RCP-${String(transactionId).replace(/-/g, '').toUpperCase()}`);
         toast.success(`Loan ${action}${action.endsWith('e') ? 'd' : 'ed'}`);
         fetchLoan();
       } else {
@@ -90,6 +93,8 @@ export default function LoanDetailPage() {
       });
       const json = await res.json();
       if (json.success) {
+        const transactionId = json.data?.transactionId || json.data?.transaction?.id;
+        if (transactionId) setReceiptNumber(json.data?.receiptNumber || `RCP-${String(transactionId).replace(/-/g, '').toUpperCase()}`);
         toast.success(`Repayment of ${fmtCurrency(repayAmount)} recorded`);
         setRepayAmount('');
         fetchLoan();
@@ -118,6 +123,13 @@ export default function LoanDetailPage() {
       <Link href="/app/loans" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="w-4 h-4" /> Back to Loans
       </Link>
+
+      {receiptNumber && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <span>Loan transaction recorded. Receipt {receiptNumber}</span>
+          <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer" className="font-semibold underline">Print receipt</Link>
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-start justify-between">

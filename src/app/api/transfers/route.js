@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
-import { verifyAuth } from '@/lib/auth-utils.js';
 import { dispatch } from '@/lib/system-events.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
@@ -11,14 +10,20 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
-    const result = await query(
-      `SELECT t.*, fa.name as from_account_name, ta.name as to_account_name
-       FROM transfers t
-       JOIN accounts fa ON t.from_account_id = fa.id
-       JOIN accounts ta ON t.to_account_id = ta.id
-       ORDER BY t.transfer_date DESC`
-    );
-    return NextResponse.json({ success: true, data: result.rows });
+    return await runWithOrganizationContext(auth.organizationId, async () => {
+      const result = await query(
+        `SELECT t.*, fa.name as from_account_name, ta.name as to_account_name
+           FROM public.transfers t
+           JOIN public.accounts fa
+             ON t.from_account_id = fa.id AND fa.organization_id = t.organization_id
+           JOIN public.accounts ta
+             ON t.to_account_id = ta.id AND ta.organization_id = t.organization_id
+          WHERE t.organization_id = $1
+          ORDER BY t.transfer_date DESC`,
+        [auth.organizationId]
+      );
+      return NextResponse.json({ success: true, data: result.rows });
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: 'Failed to fetch transfers' }, { status: 500 });
   }
@@ -30,6 +35,7 @@ export async function POST(request) {
     const perm = await requirePermission(request, 'finance.create');
     if (perm instanceof NextResponse) return perm;
     const { auth } = perm;
+    return await runWithOrganizationContext(auth.organizationId, async () => {
 
     const body = await request.json();
     const { from_account_id, to_account_id, amount, currency, to_amount, to_currency, exchange_rate, description, reference, transfer_date } = body;
@@ -41,7 +47,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Cannot transfer to same account' }, { status: 400 });
     }
 
-    const accountGuard = await runWithOrganizationContext(auth.organizationId, () => query(
+    const accountGuard = await query(
       `SELECT a.id, a.type,
               EXISTS (
                 SELECT 1
@@ -53,7 +59,7 @@ export async function POST(request) {
         WHERE a.id = ANY($1::uuid[])
           AND a.organization_id = $2`,
       [[from_account_id, to_account_id], auth.organizationId]
-    ));
+    );
     if (accountGuard.rows.length !== 2) {
       return NextResponse.json({ success: false, error: 'One or both accounts were not found in this organization' }, { status: 404 });
     }
@@ -67,13 +73,19 @@ export async function POST(request) {
     const txDate = transfer_date || new Date().toISOString().split('T')[0];
 
     // Get account names for description
-    const fromAcct = await query(`SELECT name FROM accounts WHERE id = $1`, [from_account_id]);
-    const toAcct = await query(`SELECT name FROM accounts WHERE id = $1`, [to_account_id]);
+    const fromAcct = await query(
+      `SELECT name FROM public.accounts WHERE id = $1 AND organization_id = $2`,
+      [from_account_id, auth.organizationId]
+    );
+    const toAcct = await query(
+      `SELECT name FROM public.accounts WHERE id = $1 AND organization_id = $2`,
+      [to_account_id, auth.organizationId]
+    );
 
     const transferResult = await query(
-      `INSERT INTO transfers (from_account_id, to_account_id, amount, currency, to_amount, to_currency, exchange_rate, description, reference, transfer_date, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11) RETURNING *`,
-      [from_account_id, to_account_id, amount, currency||'UGX', to_amount||null, to_currency||null,
+      `INSERT INTO public.transfers (organization_id, from_account_id, to_account_id, amount, currency, to_amount, to_currency, exchange_rate, description, reference, transfer_date, status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',$12) RETURNING *`,
+      [auth.organizationId, from_account_id, to_account_id, amount, currency||'UGX', to_amount||null, to_currency||null,
        exchange_rate||null, description||null, reference||null, txDate, auth.userId]
     );
 
@@ -83,9 +95,9 @@ export async function POST(request) {
 
     // Create DEBIT ledger entry (money out of from_account)
     const debitResult = await query(
-      `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
-       VALUES ($1,$2,$3,'transfer_out',$4,$5,'transfer',$6,$7) RETURNING id`,
-      [from_account_id, -Math.abs(amount), currency||'UGX', transfer.id,
+      `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
+       VALUES ($1,$2,$3,$4,'transfer_out',$5,$6,'transfer',$7,$8) RETURNING id`,
+      [auth.organizationId, from_account_id, -Math.abs(amount), currency||'UGX', transfer.id,
        `Transfer to ${toName}${description ? ': ' + description : ''}`, txDate, auth.userId]
     );
 
@@ -93,19 +105,20 @@ export async function POST(request) {
     const creditAmount = to_amount || amount;
     const creditCurrency = to_currency || currency || 'UGX';
     const creditResult = await query(
-      `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
-       VALUES ($1,$2,$3,'transfer_in',$4,$5,'transfer',$6,$7) RETURNING id`,
-      [to_account_id, Math.abs(creditAmount), creditCurrency, transfer.id,
+      `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
+       VALUES ($1,$2,$3,$4,'transfer_in',$5,$6,'transfer',$7,$8) RETURNING id`,
+      [auth.organizationId, to_account_id, Math.abs(creditAmount), creditCurrency, transfer.id,
        `Transfer from ${fromName}${description ? ': ' + description : ''}`, txDate, auth.userId]
     );
 
     // Link ledger entries back to transfer
-    await query(`UPDATE transfers SET ledger_debit_id = $1, ledger_credit_id = $2 WHERE id = $3`,
-      [debitResult.rows[0].id, creditResult.rows[0].id, transfer.id]);
+    await query(`UPDATE public.transfers SET ledger_debit_id = $1, ledger_credit_id = $2 WHERE id = $3 AND organization_id = $4`,
+      [debitResult.rows[0].id, creditResult.rows[0].id, transfer.id, auth.organizationId]);
 
     dispatch('transfer_completed', { entityType: 'transfer', entityId: transfer.id, description: `Transfer: ${currency || 'UGX'} ${Number(amount).toLocaleString()} from ${fromName} to ${toName}`, metadata: { amount, currency: currency || 'UGX', from: fromName, to: toName }, actorId: auth.userId }).catch(() => {});
 
     return NextResponse.json({ success: true, data: transfer }, { status: 201 });
+    });
   } catch (error) {
     console.error('[Transfers] POST error:', error);
     return NextResponse.json({ success: false, error: 'Failed to create transfer' }, { status: 500 });

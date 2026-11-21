@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Receipt, Search, ChevronLeft, ChevronRight, ExternalLink, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import Link from 'next/link';
+import Link from 'next/link';
 
 const TYPE_COLORS = {
   deposit: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -129,6 +130,7 @@ export default function TransactionsPage() {
               const credits = entries.filter(e => e.entry_type === 'CREDIT');
               const totalAmount = debits.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
               const isExpanded = expandedId === tx.id;
+              const receiptNumber = tx.receipt_number || `RCP-${String(tx.id).replace(/-/g, '').toUpperCase()}`;
 
               return (
                 <div key={tx.id}>
@@ -157,6 +159,14 @@ export default function TransactionsPage() {
                       </div>
                     </div>
                   </button>
+
+                  <div className="px-4 pb-3 flex items-center justify-between gap-3">
+                    <span className="text-xs font-mono text-muted-foreground">Receipt: {receiptNumber}</span>
+                    <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
+                      <ExternalLink className="w-3.5 h-3.5" /> Print receipt
+                    </Link>
+                  </div>
 
                   {/* Expanded entries */}
                   {isExpanded && entries.length > 0 && (

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { BookOpen, ArrowUpRight, ArrowDownRight, Filter } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
+import Link from 'next/link';
 
 export default function LedgerPage() {
   const [entries, setEntries] = useState([]);
@@ -99,12 +100,14 @@ export default function LedgerPage() {
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Account</th>
                 <th className="text-left px-4 py-3 font-medium text-muted-foreground">Type</th>
                 <th className="text-right px-4 py-3 font-medium text-muted-foreground">Amount</th>
+                <th className="text-right px-4 py-3 font-medium text-muted-foreground">Receipt</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {entries.map(e => {
                 const amt = parseFloat(e.amount);
                 const isCredit = amt > 0;
+                const receiptNumber = e.receipt_number || `RCP-${String(e.source_id || e.id).replace(/-/g, '').toUpperCase()}`;
                 return (
                   <tr key={e.id} className="hover:bg-muted">
                     <td className="px-4 py-3 text-muted-foreground">{new Date(e.created_at).toLocaleDateString()}</td>
@@ -116,6 +119,10 @@ export default function LedgerPage() {
                         {isCredit ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
                         {formatCurrency(amt)}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer"
+                        className="text-xs font-medium text-emerald-700 hover:underline dark:text-emerald-400">Receipt</Link>
                     </td>
                   </tr>
                 );

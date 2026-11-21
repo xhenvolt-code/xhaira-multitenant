@@ -83,6 +83,7 @@ export default function MemberDetailPage() {
   const [txAmount, setTxAmount] = useState('');
   const [txDescription, setTxDescription] = useState('');
   const [txLoading, setTxLoading] = useState(false);
+  const [receiptNumber, setReceiptNumber] = useState('');
   const [ledger, setLedger] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
   // Audit trail
@@ -342,6 +343,10 @@ export default function MemberDetailPage() {
       });
       const json = await res.json();
       if (json.success) {
+        if (json.transaction?.id || json.data?.transaction?.id) {
+          const transaction = json.transaction || json.data.transaction;
+          setReceiptNumber(transaction.receipt_number || `RCP-${String(transaction.id).replace(/-/g, '').toUpperCase()}`);
+        }
         toast.success(`${txModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} successful`);
         setTxModal(null);
         setTxAmount('');
@@ -413,6 +418,13 @@ export default function MemberDetailPage() {
           )}
         </div>
       </div>
+
+      {receiptNumber && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <span>Transaction recorded. Receipt {receiptNumber}</span>
+          <Link href={`/api/receipts/${encodeURIComponent(receiptNumber)}`} target="_blank" rel="noreferrer" className="font-semibold underline">Print receipt</Link>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -850,6 +862,7 @@ export default function MemberDetailPage() {
                                     {le.entry_type === 'CREDIT' ? '+' : '-'}{fmtCurrency(le.amount, a.currency)}
                                   </span>
                                   <span className="text-muted-foreground/60">{new Date(le.created_at).toLocaleDateString()}</span>
+                                  <Link href={`/api/receipts/${encodeURIComponent(le.receipt_number || `RCP-${String(le.transaction_id).replace(/-/g, '').toUpperCase()}`)}`} target="_blank" rel="noreferrer" className="font-medium text-emerald-700 hover:underline dark:text-emerald-400">Receipt</Link>
                                 </div>
                               </div>
                             ))}

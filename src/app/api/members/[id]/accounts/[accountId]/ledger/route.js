@@ -32,7 +32,7 @@ export async function GET(request, { params }) {
 
     const [entriesResult, countResult, balanceResult] = await Promise.all([
       query(
-        `SELECT le.*, t.description as tx_description, t.transaction_type, t.reference, t.created_at as tx_date
+        `SELECT le.*, t.description as tx_description, t.transaction_type, t.reference, t.receipt_number, t.created_at as tx_date
          FROM ledger_entries le
          JOIN transactions t ON t.id = le.transaction_id
          WHERE le.member_account_id = $1 AND le.organization_id = $4
