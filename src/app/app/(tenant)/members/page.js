@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Users, Search, UserCheck, UserX, Phone, Mail, CreditCard, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { Plus, Users, Search, Phone, Mail, CreditCard, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
+import { confirmDangerous } from '@/lib/confirm';
 import { formatCurrency as fmtCurrency } from '@/lib/format-currency';
 import Link from 'next/link';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
@@ -18,7 +19,7 @@ const STATUS_STYLES = {
 };
 
 export default function MembersPage() {
-  const { rememberMembers } = useMembersData();
+  const { rememberMembers, forgetMember } = useMembersData();
   const [members, setMembers] = useState([]);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +28,7 @@ export default function MembersPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [deletingMemberId, setDeletingMemberId] = useState(null);
   const membersRequestId = useRef(0);
 
   const fetchMembers = async () => {
@@ -114,6 +116,30 @@ export default function MembersPage() {
   const visibleGroups = groups.filter((group) => !search ||
     group.full_name?.toLowerCase().includes(search.toLowerCase()));
 
+  const deleteMember = async (member) => {
+    const confirmed = await confirmDangerous(
+      `${member.full_name} will be moved to Trash and hidden from normal member lists. Their accounts and history are kept until you permanently purge them from Trash.`,
+      'Move member to Trash?'
+    );
+    if (!confirmed) return;
+
+    setDeletingMemberId(member.id);
+    try {
+      const response = await fetchWithAuth(`/api/members/${member.id}/trash`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response._ok || !result.success) throw new Error(result.error || 'Could not delete member.');
+      const remainingMembers = members.filter((item) => item.id !== member.id);
+      setMembers(remainingMembers);
+      rememberMembers(remainingMembers);
+      forgetMember(member.id);
+    } catch (error) {
+      const { default: Swal } = await import('sweetalert2');
+      await Swal.fire({ title: 'Delete failed', text: error.message, icon: 'error' });
+    } finally {
+      setDeletingMemberId(null);
+    }
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -125,10 +151,15 @@ export default function MembersPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Manage cooperative members and groups separately</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition">
-          <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : activeView === 'members' ? 'New Member' : 'New Group'}
-        </button>
+        <div className="flex items-center gap-2">
+          {activeView === 'members' && <Link href="/app/members/trash" className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted/40">
+            <Trash2 className="h-4 w-4" /> Trash
+          </Link>}
+          <button onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition">
+            <Plus className="w-4 h-4" /> {showForm ? 'Cancel' : activeView === 'members' ? 'New Member' : 'New Group'}
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 border-b border-border" role="tablist" aria-label="Membership type">
@@ -197,7 +228,6 @@ export default function MembersPage() {
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
           <option value="suspended">Suspended</option>
-          <option value="exited">Exited</option>
         </select>}
       </div>
 
@@ -261,6 +291,7 @@ export default function MembersPage() {
                   <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Balance</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Status</th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Joined</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -294,6 +325,19 @@ export default function MembersPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">
                       {m.joined_at ? new Date(m.joined_at).toLocaleDateString() : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => deleteMember(m)}
+                        disabled={deletingMemberId === m.id}
+                        aria-label={`Move ${m.full_name} to Trash`}
+                        title="Move member to Trash"
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-wait disabled:opacity-50 dark:hover:bg-red-950/30"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {deletingMemberId === m.id ? 'Moving…' : 'Delete'}
+                      </button>
                     </td>
                   </tr>
                 ))}

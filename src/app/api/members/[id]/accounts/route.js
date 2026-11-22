@@ -17,7 +17,7 @@ export async function GET(request, { params }) {
 
     // Verify member exists
     const member = await query(
-      `SELECT id, full_name FROM members WHERE id = $1 AND organization_id = $2`,
+      `SELECT id, full_name FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL`,
       [id, perm.auth.organizationId]
     );
     if (member.rows.length === 0) {
@@ -58,7 +58,7 @@ export async function POST(request, { params }) {
     const { account_type, account_type_id, currency } = body;
 
     // Verify member exists and is active
-    const member = await query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1 AND organization_id = $2`, [id, perm.auth.organizationId]);
+    const member = await query(`SELECT id, full_name, status, member_kind FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL`, [id, perm.auth.organizationId]);
     if (member.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }

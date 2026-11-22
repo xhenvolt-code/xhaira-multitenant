@@ -20,7 +20,10 @@ export async function GET(request) {
 
     // RLS is the primary tenant boundary; keep the organization predicate in
     // the query as defense in depth and to make the data scope explicit.
-    let where = 'WHERE l.organization_id = $1';
+    let where = `WHERE l.organization_id = $1
+      AND EXISTS (SELECT 1 FROM members active_member
+        WHERE active_member.id = l.member_id AND active_member.organization_id = l.organization_id
+          AND active_member.trashed_at IS NULL)`;
     const params = [perm.auth.organizationId];
 
     if (status) {

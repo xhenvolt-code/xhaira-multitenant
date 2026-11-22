@@ -28,7 +28,8 @@ export async function GET(request, { params }) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
     const { id } = await params;
     const result = await query(
-      'SELECT * FROM member_documents WHERE id = $1 AND organization_id = $2',
+      `SELECT md.* FROM member_documents md JOIN members m ON m.id = md.member_id AND m.organization_id = md.organization_id
+        WHERE md.id = $1 AND md.organization_id = $2 AND m.trashed_at IS NULL`,
       [id, perm.auth.organizationId]
     );
     const document = result.rows[0];

@@ -21,10 +21,18 @@ export function MembersDataProvider({ children }) {
     }));
   }, []);
 
+  const forgetMember = useCallback((id) => {
+    setMembersById((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
   const getMember = useCallback((id) => membersById[id] || null, [membersById]);
   const value = useMemo(
-    () => ({ getMember, rememberMember, rememberMembers }),
-    [getMember, rememberMember, rememberMembers]
+    () => ({ getMember, rememberMember, rememberMembers, forgetMember }),
+    [getMember, rememberMember, rememberMembers, forgetMember]
   );
 
   return <MembersDataContext.Provider value={value}>{children}</MembersDataContext.Provider>;

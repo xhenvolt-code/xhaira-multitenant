@@ -21,7 +21,7 @@ export async function GET(request) {
     const limit    = Math.min(200, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset   = (page - 1) * limit;
 
-    let where = 'WHERE s.organization_id = $1 AND m.organization_id = $1';
+    let where = 'WHERE s.organization_id = $1 AND m.organization_id = $1 AND m.trashed_at IS NULL';
     const args = [perm.auth.organizationId];
 
     if (memberId) {
@@ -52,7 +52,7 @@ export async function GET(request) {
         `SELECT vs.*
          FROM v_member_shares vs
          JOIN members m ON m.id = vs.member_id AND m.organization_id = $1
-         ${memberId ? 'WHERE vs.member_id = $2' : ''}
+         ${memberId ? 'WHERE vs.member_id = $2 AND m.trashed_at IS NULL' : 'WHERE m.trashed_at IS NULL'}
          ORDER BY vs.total_units DESC`,
         memberId ? [perm.auth.organizationId, memberId] : [perm.auth.organizationId]
       ),
@@ -92,6 +92,10 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+
+    const member = await query('SELECT id FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL',
+      [member_id, perm.auth.organizationId]);
+    if (!member.rows[0]) return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
 
     const result = await purchaseShares({
       memberId:        member_id,

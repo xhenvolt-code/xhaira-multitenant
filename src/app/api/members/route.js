@@ -21,7 +21,7 @@ export async function GET(request) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset = (page - 1) * limit;
 
-    let where = `WHERE m.organization_id = $1 AND (m.member_kind <> 'group' OR EXISTS (
+    let where = `WHERE m.organization_id = $1 AND m.trashed_at IS NULL AND (m.member_kind <> 'group' OR EXISTS (
       SELECT 1 FROM member_groups registered_group
        WHERE registered_group.group_member_id = m.id
          AND registered_group.organization_id = m.organization_id

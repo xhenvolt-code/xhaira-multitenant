@@ -19,7 +19,7 @@ export async function GET(request, { params }) {
       `SELECT m.*, u.name as user_name, u.email as user_email
        FROM members m
        LEFT JOIN users u ON m.user_id = u.id AND u.organization_id = m.organization_id
-       WHERE m.id = $1 AND m.organization_id = $2`,
+       WHERE m.id = $1 AND m.organization_id = $2 AND m.trashed_at IS NULL`,
       [id, perm.auth.organizationId]
     );
 
@@ -62,7 +62,7 @@ export async function PUT(request, { params }) {
     const body = await request.json();
 
     // Get current data for audit
-    const current = await query(`SELECT * FROM members WHERE id = $1 AND organization_id = $2`, [id, auth.organizationId]);
+    const current = await query(`SELECT * FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL`, [id, auth.organizationId]);
     if (current.rows.length === 0) {
       return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     }
@@ -130,11 +130,14 @@ export async function PUT(request, { params }) {
          next_of_kin_phone = COALESCE($21, next_of_kin_phone),
          next_of_kin_relationship = COALESCE($22, next_of_kin_relationship),
          joined_date = COALESCE($23, joined_date),
-         exit_date = COALESCE($24, exit_date),
+         exit_date = COALESCE($24, CASE WHEN $28 = 'exited' THEN CURRENT_DATE ELSE exit_date END),
          exit_reason = COALESCE($25, exit_reason),
          suspended_reason = COALESCE($26, suspended_reason),
          notes = COALESCE($27, notes),
          status = COALESCE($28, status),
+         trashed_at = CASE WHEN $28 = 'exited' THEN COALESCE(trashed_at, NOW()) ELSE trashed_at END,
+         trashed_by = CASE WHEN $28 = 'exited' THEN COALESCE(trashed_by, $31) ELSE trashed_by END,
+         trashed_from_status = CASE WHEN $28 = 'exited' THEN COALESCE(trashed_from_status, status) ELSE trashed_from_status END,
          custom_fields = $29::jsonb,
          updated_at = NOW()
        WHERE id = $1 AND organization_id = $30
@@ -151,6 +154,7 @@ export async function PUT(request, { params }) {
         joined_date || null, exit_date || null, exit_reason || null, suspended_reason || null,
         notes || null, status || null, JSON.stringify(customFields),
         auth.organizationId,
+        auth.userId || null,
       ]
     );
 
@@ -184,7 +188,7 @@ export async function PUT(request, { params }) {
   }
 }
 
-// DELETE /api/members/[id] — Soft exit member
+// DELETE /api/members/[id] — Move member to Trash by marking them exited
 export async function DELETE(request, { params }) {
   try {
     const perm = await requirePermission(request, 'members.manage');
@@ -195,10 +199,12 @@ export async function DELETE(request, { params }) {
     const { id } = await params;
 
     const result = await query(
-      `UPDATE members SET status = 'exited', exit_date = CURRENT_DATE, updated_at = NOW()
+      `UPDATE members SET status = 'exited', exit_date = COALESCE(exit_date, CURRENT_DATE),
+          trashed_at = COALESCE(trashed_at, NOW()), trashed_by = COALESCE(trashed_by, $3),
+          trashed_from_status = COALESCE(trashed_from_status, status), updated_at = NOW()
         WHERE id = $1 AND organization_id = $2
         RETURNING id, full_name, status`,
-      [id, auth.organizationId]
+      [id, auth.organizationId, auth.userId]
     );
 
     if (result.rows.length === 0) {

@@ -212,7 +212,7 @@ async function widgetAdminStats({ organizationId }) {
     const [usersR, staffR, membersR, rolesR] = await Promise.all([
       query(`SELECT COUNT(*) as count FROM users WHERE organization_id = $1 AND is_active = true`, [organizationId]),
       query(`SELECT COUNT(*) as count FROM staff WHERE organization_id = $1 AND status = 'active'`, [organizationId]),
-      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active' AND trashed_at IS NULL`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
       query(`SELECT COUNT(*) as count FROM roles WHERE organization_id = $1`, [organizationId]),
     ]);
     return {
@@ -229,10 +229,10 @@ async function widgetAdminStats({ organizationId }) {
 async function widgetSACCOOverview({ organizationId }) {
   try {
     const [membersR, activeR, newR, accountsR] = await Promise.all([
-      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND joined_date >= date_trunc('month', NOW())`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
-      query(`SELECT COUNT(*) as count FROM member_accounts WHERE organization_id = $1 AND status = 'active'`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND trashed_at IS NULL`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND status = 'active' AND trashed_at IS NULL`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM members WHERE organization_id = $1 AND trashed_at IS NULL AND joined_date >= date_trunc('month', NOW())`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
+      query(`SELECT COUNT(*) as count FROM member_accounts ma JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id WHERE ma.organization_id = $1 AND ma.status = 'active' AND m.trashed_at IS NULL`, [organizationId]).catch(() => ({ rows: [{ count: 0 }] })),
     ]);
     return {
       total_members:  parseInt(membersR.rows[0]?.count || 0),
@@ -251,7 +251,9 @@ async function widgetLoanPortfolio() {
         COALESCE(SUM(disbursed_amount) FILTER (WHERE disbursed_amount IS NOT NULL), 0) AS total_disbursed,
         COUNT(*) FILTER (WHERE status = 'pending')                                    AS pending_loans,
         COUNT(*) FILTER (WHERE status = 'overdue')                                    AS overdue_loans
-      FROM loans
+      FROM loans l
+      JOIN members m ON m.id = l.member_id AND m.organization_id = l.organization_id
+      WHERE m.trashed_at IS NULL
     `).catch(() => ({ rows: [] }));
     return rows[0] || { active_loans: 0, total_disbursed: 0, pending_loans: 0, overdue_loans: 0 };
   } catch { return { active_loans: 0, total_disbursed: 0, pending_loans: 0, overdue_loans: 0 }; }

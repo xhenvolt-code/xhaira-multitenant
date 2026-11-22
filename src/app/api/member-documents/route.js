@@ -48,7 +48,7 @@ export async function POST(request) {
     if (!file || typeof memberId !== 'string' || typeof documentKey !== 'string') {
       return NextResponse.json({ success: false, error: 'file, member_id, and document_key are required' }, { status: 400 });
     }
-    const member = await query('SELECT id FROM members WHERE id = $1 AND organization_id = $2', [memberId, perm.auth.organizationId]);
+    const member = await query('SELECT id FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL', [memberId, perm.auth.organizationId]);
     if (!member.rows[0]) return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });
     const configResult = await query(
       'SELECT * FROM member_document_type_configs WHERE document_key = $1 AND organization_id = $2',
@@ -106,7 +106,7 @@ export async function GET(request) {
     const memberId = new URL(request.url).searchParams.get('member_id');
     if (!memberId) return NextResponse.json({ success: false, error: 'member_id is required' }, { status: 400 });
     const member = await query(
-      'SELECT id FROM members WHERE id = $1 AND organization_id = $2',
+      'SELECT id FROM members WHERE id = $1 AND organization_id = $2 AND trashed_at IS NULL',
       [memberId, perm.auth.organizationId]
     );
     if (!member.rows[0]) return NextResponse.json({ success: false, error: 'Member not found' }, { status: 404 });

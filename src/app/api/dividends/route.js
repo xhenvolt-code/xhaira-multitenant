@@ -23,7 +23,7 @@ export async function GET(request) {
     const limit          = Math.min(200, Math.max(1, parseInt(searchParams.get('limit') || '50')));
     const offset         = (page - 1) * limit;
 
-    let where = 'WHERE d.organization_id = $1 AND m.organization_id = $1';
+    let where = 'WHERE d.organization_id = $1 AND m.organization_id = $1 AND m.trashed_at IS NULL';
     const args = [perm.auth.organizationId];
 
     if (memberId) {

@@ -11,7 +11,7 @@ export async function GET(request, { params }) {
       const { id } = await params;
       const result = await query(`SELECT m.id, m.full_name, m.membership_number, m.status
         FROM member_group_links l JOIN members m ON m.id = l.member_id
-        WHERE l.group_id = $1 AND l.organization_id = $2
+        WHERE l.group_id = $1 AND l.organization_id = $2 AND m.trashed_at IS NULL
           AND m.organization_id = $2 ORDER BY m.full_name`, [id, perm.auth.organizationId]);
       return NextResponse.json({ success: true, data: result.rows });
     });
@@ -44,7 +44,7 @@ export async function POST(request, { params }) {
       await client.query('BEGIN');
       const [group, members] = await Promise.all([
         client.query('SELECT id FROM member_groups WHERE id = $1 AND organization_id = $2 FOR UPDATE', [id, perm.auth.organizationId]),
-        client.query("SELECT id FROM members WHERE id = ANY($1::uuid[]) AND member_kind = 'individual' AND organization_id = $2 ORDER BY id", [memberIds, perm.auth.organizationId]),
+        client.query("SELECT id FROM members WHERE id = ANY($1::uuid[]) AND member_kind = 'individual' AND organization_id = $2 AND trashed_at IS NULL ORDER BY id", [memberIds, perm.auth.organizationId]),
       ]);
       if (!group.rows[0] || members.rows.length !== memberIds.length) {
         await client.query('ROLLBACK');

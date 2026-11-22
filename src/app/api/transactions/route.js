@@ -104,6 +104,20 @@ export async function POST(request) {
 
     const body = await request.json();
     const { action, member_account_id, account_id, amount, description, reference, entries, transaction_type, metadata, reason, paid_by, withdrawn_to } = body;
+    const requestedMemberAccountIds = [...new Set((['deposit', 'withdraw'].includes(action)
+      ? [member_account_id]
+      : (Array.isArray(entries) ? entries.map((entry) => entry.member_account_id) : [])).filter(Boolean))];
+    if (requestedMemberAccountIds.length) {
+      const availableAccounts = await query(
+        `SELECT COUNT(*)::int AS count
+           FROM member_accounts ma JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+          WHERE ma.organization_id = $1 AND ma.id = ANY($2::uuid[]) AND m.trashed_at IS NULL`,
+        [perm.auth.organizationId, requestedMemberAccountIds]
+      );
+      if (availableAccounts.rows[0].count !== requestedMemberAccountIds.length) {
+        return NextResponse.json({ success: false, error: 'One or more member accounts are unavailable' }, { status: 404 });
+      }
+    }
     const transactionMetadata = {
       ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
       ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim().slice(0, 1000) } : {}),

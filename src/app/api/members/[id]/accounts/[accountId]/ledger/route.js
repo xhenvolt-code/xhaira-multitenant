@@ -18,7 +18,7 @@ export async function GET(request, { params }) {
        FROM member_accounts ma
        JOIN members m ON m.id = ma.member_id
        WHERE ma.id = $1 AND ma.member_id = $2
-         AND ma.organization_id = $3 AND m.organization_id = $3`,
+         AND ma.organization_id = $3 AND m.organization_id = $3 AND m.trashed_at IS NULL`,
       [accountId, id, perm.auth.organizationId]
     );
     if (account.rows.length === 0) {
