@@ -87,7 +87,7 @@ export async function POST(request, { params }) {
     const accountTypeByCode = { VOL_SAV: 'savings', FIXED_SAV: 'fixed_deposit', FIXED_DEP: 'fixed_deposit', SHARES: 'shares', LOAN_ACC: 'loan', INVEST: 'investment' };
     const resolvedAccountType = accountTypeByCode[typeCode] || String(typeCode).toLowerCase();
 
-    // Generate account number: CEVA-TYPE-099 plus six random digits.
+    // Format: CEVA-{3-character type prefix}-099{six-digit random numeric suffix}.
     const typePrefix = String(typeCode).substring(0, 3).toUpperCase();
     const randomSuffix = randomInt(0, 1_000_000).toString().padStart(6, '0');
     const account_number = `CEVA-${typePrefix}-099${randomSuffix}`;
