@@ -34,6 +34,27 @@ export async function createMobileMoneyCollection({ amountUgx, phone, memberAcco
     return { ok: false, status: 400, error: 'Deposit reason and receiver name are required; depositor name is optional' };
   }
 
+  const schema = await getPool().query(
+    `SELECT COUNT(*)::int AS column_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'payment_intents'
+        AND column_name = ANY($1::text[])`,
+    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor', 'organization_account_id']]
+  );
+  const directionConstraint = await getPool().query(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM pg_constraint
+        WHERE conrelid = to_regclass('public.payment_intents')
+          AND conname = 'payment_intents_direction_check'
+          AND pg_get_constraintdef(oid) LIKE '%disbursement%'
+     ) AS supports_disbursements`
+  );
+  if (schema.rows[0]?.column_count !== 6 || !directionConstraint.rows[0]?.supports_disbursements) {
+    return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, 963, and 981, then retry.' };
+  }
+
   const existing = await getPool().query(
     "SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id, organization_account_id FROM payment_intents WHERE organization_id = public.current_organization_id() AND idempotency_key = $1 LIMIT 1",
     [idempotencyKey]
@@ -56,26 +77,6 @@ export async function createMobileMoneyCollection({ amountUgx, phone, memberAcco
   const feeBasisPoints = await getMarzpayCollectionFeeBasisPoints();
   if (feeBasisPoints === null) {
     return { ok: false, status: 503, error: 'Organization MarzPay collection-fee settings are missing or invalid; no payment was sent' };
-  }
-  const schema = await getPool().query(
-    `SELECT COUNT(*)::int AS column_count
-       FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'payment_intents'
-        AND column_name = ANY($1::text[])`,
-    [['provider_amount_minor', 'provider_currency', 'provider_mode', 'ledger_amount_minor', 'provider_fee_minor', 'organization_account_id']]
-  );
-  const directionConstraint = await getPool().query(
-    `SELECT EXISTS (
-       SELECT 1
-         FROM pg_constraint
-        WHERE conrelid = to_regclass('public.payment_intents')
-          AND conname = 'payment_intents_direction_check'
-          AND pg_get_constraintdef(oid) LIKE '%disbursement%'
-     ) AS supports_disbursements`
-  );
-  if (schema.rows[0]?.column_count !== 6 || !directionConstraint.rows[0]?.supports_disbursements) {
-    return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, 963, and 981, then retry.' };
   }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = organizationCollection
