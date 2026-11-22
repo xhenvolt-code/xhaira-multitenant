@@ -29,6 +29,8 @@ export async function GET(request) {
     const settlementAccount = await getMarzpaySettlementAccount();
     const result = await getPool().query(
         `SELECT id, direction, amount_minor, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
+              metadata->>'reason' AS reason, metadata->>'depositor_name' AS depositor_name,
+              metadata->>'receiver_name' AS receiver_name,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
               ledger_status, reconciliation_status, reconciliation_error,
               reconciliation_adjustment_transaction_id, ledger_failure_reason,
@@ -58,6 +60,9 @@ export async function POST(request) {
       amountUgx: Number(body?.amountUgx),
       phone: typeof body?.phone === 'string' ? body.phone : '',
       memberAccountId: body?.memberAccountId,
+      depositorName: typeof body?.depositorName === 'string' ? body.depositorName.trim() : '',
+      receiverName: typeof body?.receiverName === 'string' ? body.receiverName.trim() : '',
+      reason: typeof body?.reason === 'string' ? body.reason.trim() : '',
       idempotencyKey: request.headers.get('idempotency-key'),
       userId: permission.auth.userId,
       callbackUrl: callbackUrl(),
@@ -66,6 +71,8 @@ export async function POST(request) {
     const intent = result.id
       ? (await getPool().query(
         `SELECT status, provider_status, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
+                metadata->>'reason' AS reason, metadata->>'depositor_name' AS depositor_name,
+                metadata->>'receiver_name' AS receiver_name,
                 provider_currency, ledger_status, reconciliation_status, reconciliation_error,
                 reconciliation_adjustment_transaction_id, ledger_failure_reason, failure_reason
            FROM payment_intents WHERE id = $1`,
@@ -79,6 +86,9 @@ export async function POST(request) {
       provider_status: intent?.provider_status,
       provider_amount_minor: intent?.provider_amount_minor,
       provider_fee_minor: intent?.provider_fee_minor,
+      reason: intent?.reason,
+      depositor_name: intent?.depositor_name,
+      receiver_name: intent?.receiver_name,
       ledger_amount_minor: intent?.ledger_amount_minor,
       provider_currency: intent?.provider_currency,
       ledger_status: intent?.ledger_status,

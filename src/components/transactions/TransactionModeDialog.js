@@ -19,6 +19,8 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
   const [settings, setSettings] = useState({ configured: false, collectionsEnabled: false, disbursementsEnabled: false, settlementAccount: null });
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [partyName, setPartyName] = useState('');
   const [intent, setIntent] = useState(null);
   const [busy, setBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
@@ -65,6 +67,9 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
           amountUgx: Number(amount),
           phone,
           memberAccountId: account.memberAccountId,
+          reason,
+          depositorName: isDeposit ? (partyName.trim() || undefined) : undefined,
+          receiverName: isDeposit ? (account.memberName || account.full_name) : partyName.trim(),
         }),
       });
       if (!result.success) throw new Error(result.error || 'Could not start the mobile-money transaction.');
@@ -164,6 +169,12 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
             <label className="block text-sm">Amount (UGX)
               <input className={inputClass} required type="number" min="1" step="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
             </label>
+            <label className="block text-sm">Reason
+              <input className={inputClass} required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} placeholder={isDeposit ? 'Reason for deposit' : 'Reason for withdrawal'} />
+            </label>
+            <label className="block text-sm">{isDeposit ? 'Deposited by (optional)' : 'Receiver name'}
+              <input className={inputClass} required={!isDeposit} maxLength={255} value={partyName} onChange={e => setPartyName(e.target.value)} placeholder={isDeposit ? 'Person making the payment' : 'Person receiving the payout'} />
+            </label>
             {error && <p role="alert" className="flex items-start gap-2 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</p>}
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => setStep('choose')} className="flex-1 rounded-lg border border-border py-2 text-sm hover:bg-muted">Back</button>
@@ -184,6 +195,9 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
               : intent?.ledger_status === 'posted' ? 'posted' : intent?.ledger_status === 'failed' ? 'posting failed — retry available' : 'not posted'}</p>
             {!isDeposit && <p className="text-sm">Reconciliation: {intent?.reconciliation_status || 'pending'}</p>}
             <p className="mt-1 text-sm text-muted-foreground">{account.label}</p>
+            {intent?.reason && <p className="text-sm text-muted-foreground">Reason: {intent.reason}</p>}
+            {intent?.depositor_name && <p className="text-sm text-muted-foreground">Depositor: {intent.depositor_name}</p>}
+            {intent?.receiver_name && <p className="text-sm text-muted-foreground">Receiver: {intent.receiver_name}</p>}
             <p className="mt-2 text-sm text-muted-foreground">Requested: {formatCurrency(intent?.amount_minor ?? amount, 'UGX')}</p>
             <p className="text-sm text-muted-foreground">Provider confirmed: {intent?.provider_amount_minor == null
               ? 'Not available'

@@ -48,7 +48,8 @@ export async function GET(request) {
       ),
       optionalQuery(
         `SELECT currency,
-                COALESCE(SUM(COALESCE((fee_calculation->>'xhenvoltRevenueMinor')::numeric, 0)), 0) / 100 AS transaction_fees
+                COALESCE(SUM(COALESCE((fee_calculation->>'xhenvoltRevenueMinor')::numeric, 0)), 0) /
+                  CASE WHEN currency = 'UGX' THEN 1 ELSE 100 END AS transaction_fees
            FROM public.payment_intents WHERE status = 'settled' GROUP BY currency ORDER BY currency`
       ),
       queryPlatform(

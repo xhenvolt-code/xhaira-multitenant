@@ -8,6 +8,7 @@ const links = [
   ['/app/platform/dashboard', 'Overview'],
   ['/app/platform/institutions', 'Institutions'],
   ['/app/platform/transactions', 'Transactions'],
+  ['/app/platform/fees', 'Transaction fees'],
   ['/app/platform/funding', 'Funding & settlements'],
   ['/app/platform/administrators', 'Platform administrators'],
   ['/app/platform/audit', 'Audit trail'],

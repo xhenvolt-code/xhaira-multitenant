@@ -98,6 +98,15 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+    if (typeof reason !== 'string' || !reason.trim()) {
+      return NextResponse.json({ success: false, error: 'A transaction reason is required' }, { status: 400 });
+    }
+    if (action === 'withdraw' && (typeof withdrawn_to !== 'string' || !withdrawn_to.trim())) {
+      return NextResponse.json({ success: false, error: 'Receiver name is required for a withdrawal' }, { status: 400 });
+    }
+    if (action === 'deposit' && paid_by != null && typeof paid_by !== 'string') {
+      return NextResponse.json({ success: false, error: 'Deposited by must be text when provided' }, { status: 400 });
+    }
     if (parseFloat(amount) <= 0) {
       return NextResponse.json(
         { success: false, error: 'amount must be positive' },
@@ -113,8 +122,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount:          amountValue,
         description,
-        reason: reason || description,
-        paidBy: typeof paid_by === 'string' ? paid_by.trim().slice(0, 255) : null,
+        reason: reason.trim().slice(0, 1000),
+        paidBy: typeof paid_by === 'string' ? paid_by.trim().slice(0, 255) || null : null,
         reference,
         userId:          perm.auth.userId,
         paymentMethod,
@@ -126,8 +135,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount:          amountValue,
         description,
-        reason: reason || description,
-        withdrawnTo: typeof withdrawn_to === 'string' ? withdrawn_to.trim().slice(0, 255) : null,
+        reason: reason.trim().slice(0, 1000),
+        withdrawnTo: withdrawn_to.trim().slice(0, 255),
         reference,
         userId:          perm.auth.userId,
         force:           isSuperAdmin && force === true,

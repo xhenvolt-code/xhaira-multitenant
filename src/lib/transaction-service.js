@@ -93,6 +93,13 @@ export async function createTransaction({
     ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
     reason: metadata?.reason || description,
   };
+  const reason = String(transactionMetadata.reason || description).trim().slice(0, 1000);
+  const depositorName = String(transactionMetadata.depositor_name || transactionMetadata.paid_by || '').trim().slice(0, 255) || null;
+  const receiverName = String(transactionMetadata.receiver_name || transactionMetadata.withdrawn_to || '').trim().slice(0, 255) || null;
+  const principalMinor = Number.isSafeInteger(Number(transactionMetadata.principal_minor)) && Number(transactionMetadata.principal_minor) >= 0
+    ? Number(transactionMetadata.principal_minor) : null;
+  const transactionChargesMinor = Number.isSafeInteger(Number(transactionMetadata.transaction_charges_minor)) && Number(transactionMetadata.transaction_charges_minor) >= 0
+    ? Number(transactionMetadata.transaction_charges_minor) : null;
 
   try {
     if (ownsClient) await client.query('BEGIN');
@@ -144,9 +151,12 @@ export async function createTransaction({
 
     // Create the transaction record
     const txResult = await client.query(
-      `INSERT INTO transactions (description, transaction_type, reference, metadata, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [description, transaction_type || null, reference || null, JSON.stringify(transactionMetadata), userId]
+      `INSERT INTO transactions
+         (description, transaction_type, reference, metadata, reason, depositor_name, receiver_name,
+          principal_minor, transaction_charges_minor, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [description, transaction_type || null, reference || null, JSON.stringify(transactionMetadata),
+        reason, depositorName, receiverName, principalMinor, transactionChargesMinor, userId]
     );
     const transaction = txResult.rows[0];
 
@@ -240,11 +250,17 @@ export async function getMemberAccountBalance(memberAccountId) {
 /**
  * Deposit money into a member account (from SACCO cash)
  */
-export async function deposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', reason, paidBy }) {
+export async function deposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', reason, paidBy, receiverName }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
     const systemAccountId = await getSystemAccountId(client);
+    const ownerResult = await client.query(
+      `SELECT m.full_name FROM member_accounts ma
+       JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+       WHERE ma.id = $1 AND ma.organization_id = public.current_organization_id()`,
+      [memberAccountId]
+    );
     client.release();
 
     return await createTransaction({
@@ -255,6 +271,9 @@ export async function deposit({ memberAccountId, amount, description, reference,
         payment_method: paymentMethod,
         reason: reason || description || 'Member deposit',
         paid_by: paidBy || null,
+        depositor_name: paidBy || null,
+        receiver_name: receiverName || ownerResult.rows[0]?.full_name || null,
+        principal_minor: amount,
       },
       userId,
       entries: [
@@ -308,6 +327,12 @@ export async function withdraw({ memberAccountId, amount, description, reference
     }
 
     const systemAccountId = await getSystemAccountId(client);
+    const ownerResult = await client.query(
+      `SELECT m.full_name FROM member_accounts ma
+       JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+       WHERE ma.id = $1 AND ma.organization_id = public.current_organization_id()`,
+      [memberAccountId]
+    );
     const result = await createTransaction({
       description: description || 'Member withdrawal',
       transaction_type: 'withdrawal',
@@ -316,6 +341,9 @@ export async function withdraw({ memberAccountId, amount, description, reference
         payment_method: paymentMethod,
         reason: reason || description || 'Member withdrawal',
         withdrawn_to: withdrawnTo || null,
+        depositor_name: ownerResult.rows[0]?.full_name || null,
+        receiver_name: withdrawnTo || null,
+        principal_minor: amount,
       },
       userId,
       entries: [

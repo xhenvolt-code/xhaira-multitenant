@@ -11,11 +11,13 @@ function formatAmount(amount, currency = 'UGX') {
   return `${currency} ${Number(amount || 0).toLocaleString('en-UG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function renderReceipt({ receiptNumber, organization, event, lines, creator, createdAt, reference, metadata = {}, installments = [] }) {
+function renderReceipt({ receiptNumber, organization, event, lines, creator, createdAt, reference, metadata = {}, reason, depositorName, receiverName, principalMinor, transactionChargesMinor, installments = [] }) {
   const type = String(event || 'financial transaction').replace(/_/g, ' ');
   const date = createdAt
     ? new Date(createdAt).toLocaleString('en-UG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Kampala' })
     : '—';
+  const chargeMinor = Number(transactionChargesMinor);
+  const hasConsolidatedCharges = Number.isSafeInteger(chargeMinor) && chargeMinor > 0;
   const rows = lines.map((line) => `<tr>
     <td>${escapeHtml(line.description || type)}</td>
     <td>${escapeHtml(line.account_name || line.member_account || 'Account')}</td>
@@ -29,10 +31,26 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
     : isTransferLedger ? lines.filter((line) => line.entry_type === 'OUT') : lines;
   const total = totalLines.reduce((sum, line) => sum + Math.abs(Number(line.amount || 0)), 0);
   const totalCurrency = totalLines[0]?.currency || lines[0]?.currency || 'UGX';
-  const details = metadata.payment_method || metadata.provider || '';
-  const reasonRow = metadata.reason ? `<div><span>Reason</span>${escapeHtml(metadata.reason)}</div>` : '';
-  const payerRow = metadata.paid_by ? `<div><span>Paid by</span>${escapeHtml(metadata.paid_by)}</div>` : '';
-  const recipientRow = metadata.withdrawn_to ? `<div><span>Withdrawn to</span>${escapeHtml(metadata.withdrawn_to)}</div>` : '';
+  const receiptRows = hasConsolidatedCharges
+    ? `<tr><td>${type.toLowerCase().includes('withdrawal') ? 'Amount withdrawn' : 'Amount credited'}</td><td>Member account</td><td>—</td><td class="amount">${escapeHtml(formatAmount(
+      Number.isSafeInteger(Number(principalMinor))
+        ? Number(principalMinor)
+        : Number.isSafeInteger(Number(metadata.principal_minor)) ? Number(metadata.principal_minor)
+        : type.toLowerCase().includes('withdrawal') ? Math.max(0, total - chargeMinor) : total,
+      totalCurrency))}</td></tr>
+       <tr><td>Transaction charges</td><td>Combined charges</td><td>—</td><td class="amount">${escapeHtml(formatAmount(chargeMinor, totalCurrency))}</td></tr>`
+    : rows;
+  const details = metadata.payment_method || '';
+  const reasonRow = (reason || metadata.reason) ? `<div><span>Reason</span>${escapeHtml(reason || metadata.reason)}</div>` : '';
+  const payer = depositorName || metadata.depositor_name || metadata.paid_by;
+  const recipient = receiverName || metadata.receiver_name || metadata.withdrawn_to;
+  const payerRow = payer ? `<div><span>Depositor</span>${escapeHtml(payer)}</div>` : '';
+  const recipientRow = recipient ? `<div><span>Receiver</span>${escapeHtml(recipient)}</div>` : '';
+  const chargeRow = '';
+  const totalLabel = type.toLowerCase().includes('withdrawal') ? 'Amount withdrawn' : isTransferLedger ? 'Outgoing total' : 'Total';
+  const totalBlock = hasConsolidatedCharges && type.toLowerCase().includes('withdrawal')
+    ? ''
+    : `<div class="total"><span>${escapeHtml(totalLabel)}</span><span>${escapeHtml(formatAmount(total, totalCurrency))}</span></div>`;
   const classificationRow = metadata.classification ? `<div><span>Classification</span>${escapeHtml(metadata.classification)}</div>` : '';
   const installmentRows = installments.map((item) => `<tr><td>Installment ${escapeHtml(item.installment_number)}</td><td>${escapeHtml(item.status)}</td><td class="amount">${escapeHtml(formatAmount(item.paid_amount))}</td></tr>`).join('');
   const phone = organization.contact_phones || '';
@@ -67,11 +85,11 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   </div><div class="receipt"><strong>RECEIPT</strong><span>${escapeHtml(receiptNumber)}</span></div></header>
   <section class="summary"><div><span>Transaction</span>${escapeHtml(type)}</div><div><span>Date and time</span>${escapeHtml(date)}</div>
   <div><span>Recorded by</span>${escapeHtml(creator || 'System')}</div><div><span>Reference</span>${escapeHtml(reference || '—')}</div>
-  ${details ? `<div><span>Payment channel</span>${escapeHtml(details)}</div>` : ''}${reasonRow}${payerRow}${recipientRow}${classificationRow}</section>
+  ${details ? `<div><span>Payment channel</span>${escapeHtml(details)}</div>` : ''}${reasonRow}${payerRow}${recipientRow}${chargeRow}${classificationRow}</section>
   <table><thead><tr><th>Description</th><th>Account / Member</th><th>Entry</th><th class="amount">Amount</th></tr></thead>
-  <tbody>${rows || '<tr><td colspan="4">No ledger lines found</td></tr>'}</tbody></table>
+  <tbody>${receiptRows || '<tr><td colspan="4">No ledger lines found</td></tr>'}</tbody></table>
   ${installmentRows ? `<h2>Loan installment status</h2><table><thead><tr><th>Installment</th><th>Status after this payment</th><th class="amount">Cumulative paid</th></tr></thead><tbody>${installmentRows}</tbody></table>` : ''}
-  <div class="total"><span>${isTransferLedger ? 'Outgoing total' : 'Total'}</span><span>${escapeHtml(formatAmount(total, totalCurrency))}</span></div>
+  ${totalBlock}
   <footer>System generated receipt. Keep this receipt for your records.<br>${escapeHtml(receiptNumber)}</footer></body></html>`;
 }
 
@@ -89,7 +107,8 @@ export async function GET(request, { params }) {
     const html = await runWithOrganizationContext(auth.organizationId, async () => {
       const transactionResult = await query(
         `SELECT t.id, COALESCE(t.receipt_number, 'RCP-' || UPPER(REPLACE(t.id::TEXT, '-', ''))) AS receipt_number,
-                t.transaction_type, t.description, t.reference, t.metadata, t.created_at, u.name AS creator_name,
+                t.transaction_type, t.description, t.reference, t.metadata, t.reason, t.depositor_name, t.receiver_name,
+                t.principal_minor, t.transaction_charges_minor, t.created_at, u.name AS creator_name,
                 o.name AS organization_name, cb.contact_phones, cb.contact_email, cb.website, cb.address, cb.logo_url
            FROM public.transactions t
            LEFT JOIN public.users u ON u.id = t.created_by AND u.organization_id = t.organization_id
@@ -135,7 +154,11 @@ export async function GET(request, { params }) {
         return renderReceipt({ receiptNumber: transaction.receipt_number, organization: transaction,
           event: transaction.transaction_type, lines, creator: transaction.creator_name,
           createdAt: transaction.created_at, reference: transaction.reference,
-          metadata: transaction.metadata || {}, installments: installmentResult.rows });
+          metadata: transaction.metadata || {}, reason: transaction.reason,
+          depositorName: transaction.depositor_name, receiverName: transaction.receiver_name,
+          principalMinor: transaction.principal_minor,
+          transactionChargesMinor: transaction.transaction_charges_minor,
+          installments: installmentResult.rows });
       }
 
       const ledgerResult = await query(

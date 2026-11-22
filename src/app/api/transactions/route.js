@@ -122,18 +122,27 @@ export async function POST(request) {
       if (!member_account_id || !amount) {
         return NextResponse.json({ success: false, error: 'member_account_id and amount required for deposit' }, { status: 400 });
       }
+      if (typeof reason !== 'string' || !reason.trim()) {
+        return NextResponse.json({ success: false, error: 'A reason is required for a deposit' }, { status: 400 });
+      }
+      if (paid_by != null && typeof paid_by !== 'string') {
+        return NextResponse.json({ success: false, error: 'Deposited by must be text when provided' }, { status: 400 });
+      }
       result = await deposit({
         memberAccountId: member_account_id,
         amount: parseFloat(amount),
         description,
         reason,
-        paidBy: paid_by,
+        paidBy: typeof paid_by === 'string' ? paid_by.trim().slice(0, 255) || null : null,
         reference,
         userId: perm.auth.userId,
       });
     } else if (action === 'withdraw') {
       if (!member_account_id || !amount) {
         return NextResponse.json({ success: false, error: 'member_account_id and amount required for withdrawal' }, { status: 400 });
+      }
+      if (typeof reason !== 'string' || !reason.trim() || typeof withdrawn_to !== 'string' || !withdrawn_to.trim()) {
+        return NextResponse.json({ success: false, error: 'Reason and receiver name are required for a withdrawal' }, { status: 400 });
       }
       result = await withdraw({
         memberAccountId: member_account_id,

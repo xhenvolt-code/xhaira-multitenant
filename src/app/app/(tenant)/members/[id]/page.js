@@ -83,6 +83,7 @@ export default function MemberDetailPage() {
   const [txModeModal, setTxModeModal] = useState(null);
   const [txAmount, setTxAmount] = useState('');
   const [txDescription, setTxDescription] = useState('');
+  const [txPartyName, setTxPartyName] = useState('');
   const [txLoading, setTxLoading] = useState(false);
   const [receiptNumber, setReceiptNumber] = useState('');
   const [ledger, setLedger] = useState([]);
@@ -349,6 +350,9 @@ export default function MemberDetailPage() {
           member_account_id: txModal.accountId,
           amount: parseFloat(txAmount),
           description: txDescription || `${txModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} — ${txModal.accountNumber}`,
+          reason: txDescription || `${txModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} — ${txModal.accountNumber}`,
+          paid_by: txModal.action === 'deposit' ? txPartyName.trim() || undefined : undefined,
+          withdrawn_to: txModal.action === 'withdraw' ? txPartyName.trim() || undefined : undefined,
           payment_method: txModal.paymentMethod || 'cash',
         }),
       });
@@ -362,6 +366,7 @@ export default function MemberDetailPage() {
         setTxModal(null);
         setTxAmount('');
         setTxDescription('');
+        setTxPartyName('');
         applyAccountBalance(txModal.accountId, json.balance);
         if (selectedAccount === txModal.accountId) fetchLedger(txModal.accountId);
       } else {
@@ -980,9 +985,9 @@ export default function MemberDetailPage() {
       {txModeModal && (
         <TransactionModeDialog
           action={txModeModal.action}
-          account={{ memberAccountId: txModeModal.accountId, label: `${member?.full_name || 'Member'} · ${txModeModal.account.account_number || ''}`, balance: txModeModal.account.balance }}
+          account={{ memberAccountId: txModeModal.accountId, memberName: member?.full_name, label: `${member?.full_name || 'Member'} · ${txModeModal.account.account_number || ''}`, balance: txModeModal.account.balance }}
           onClose={() => setTxModeModal(null)}
-          onManual={(paymentMethod) => { setTxModeModal(null); setTxModal({ action: txModeModal.action, accountId: txModeModal.accountId, accountNumber: txModeModal.account.account_number, paymentMethod }); }}
+          onManual={(paymentMethod) => { setTxModeModal(null); setTxAmount(''); setTxDescription(''); setTxPartyName(''); setTxModal({ action: txModeModal.action, accountId: txModeModal.accountId, accountNumber: txModeModal.account.account_number, paymentMethod }); }}
           onSuccess={(data) => { toast.success(`${txModeModal.action === 'deposit' ? 'Deposit' : 'Withdrawal'} confirmed by MarzPay`); applyAccountBalance(txModeModal.accountId, data?.balance); setTxModeModal(null); fetchLedger(txModeModal.accountId); }}
         />
       )}
@@ -1003,8 +1008,13 @@ export default function MemberDetailPage() {
               <input value={txDescription} onChange={e => setTxDescription(e.target.value)}
                 placeholder={txModal.action === 'deposit' ? 'Member deposit' : 'Member withdrawal'} className={inputClass} />
             </div>
+            <div>
+              <label className={labelClass}>{txModal.action === 'deposit' ? 'Deposited by (optional)' : 'Receiver name'}</label>
+              <input value={txPartyName} onChange={e => setTxPartyName(e.target.value)} maxLength={255}
+                required={txModal.action === 'withdraw'} placeholder={txModal.action === 'deposit' ? 'Person making the payment' : 'Person receiving the funds'} className={inputClass} />
+            </div>
             <div className="flex gap-2 pt-2">
-              <button type="button" onClick={() => { setTxModal(null); setTxAmount(''); setTxDescription(''); }}
+              <button type="button" onClick={() => { setTxModal(null); setTxAmount(''); setTxDescription(''); setTxPartyName(''); }}
                 className="flex-1 px-4 py-2 border border-border rounded-lg text-sm hover:bg-muted">Cancel</button>
               <button type="submit" disabled={txLoading}
                 className={`flex-1 px-4 py-2 rounded-lg text-sm text-white font-medium disabled:opacity-50 ${txModal.action === 'deposit' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>

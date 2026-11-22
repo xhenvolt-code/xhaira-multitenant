@@ -225,8 +225,8 @@ export default function PaymentsPage() {
             <input required inputMode="tel" autoComplete="tel" value={collectionForm.phone} onChange={event => setCollectionForm(form => ({ ...form, phone: event.target.value }))} placeholder="07xx xxx xxx" className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
           </label>
           <label className="text-sm text-muted-foreground">
-            Depositor name
-            <input required maxLength={255} value={collectionForm.depositorName} onChange={event => setCollectionForm(form => ({ ...form, depositorName: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
+            Deposited by (optional)
+            <input maxLength={255} value={collectionForm.depositorName} onChange={event => setCollectionForm(form => ({ ...form, depositorName: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
           </label>
           <label className="text-sm text-muted-foreground">
             Deposit reason
@@ -290,6 +290,7 @@ export default function PaymentsPage() {
                       Provider: {intent.provider_status || 'unknown'} · Ledger: {intent.status === 'settled' ? 'posted' : 'not posted'}
                       {intent.phone_masked ? ` · ${intent.phone_masked}` : ''}
                     </p>
+                    {intent.depositor_name && <p className="text-xs text-muted-foreground">Deposited by: {intent.depositor_name}</p>}
                   </div>
                   {['created', 'processing', 'review'].includes(intent.status) && (
                     <button

@@ -18,8 +18,8 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
   try {
     await client.query('BEGIN');
     const locked = await client.query(
-      `SELECT id, direction, status, ledger_status, transaction_id, amount_minor,
-              settlement_account_id, member_account_id, provider_reference, provider_uuid,
+      `SELECT id, direction, status, ledger_status, transaction_id, amount_minor, metadata, fee_calculation,
+              settlement_account_id, member_account_id, provider_reference, provider_uuid, provider_fee_minor, provider_fee_confirmed,
               created_by
          FROM payment_intents
         WHERE id = $1 AND direction = 'disbursement'
@@ -36,8 +36,10 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
       if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('Requested withdrawal amount is invalid');
 
       const transaction = await client.query(
-        `INSERT INTO transactions (description, transaction_type, reference, metadata, created_by)
-         VALUES ($1, 'withdrawal', $2, $3::jsonb, $4)
+        `INSERT INTO transactions
+           (description, transaction_type, reference, metadata, reason, depositor_name, receiver_name,
+            principal_minor, transaction_charges_minor, created_by)
+         VALUES ($1, 'withdrawal', $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
         [
           'MarzPay mobile money withdrawal',
@@ -48,11 +50,24 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
             direction: 'disbursement',
             provider_uuid: intent.provider_uuid,
             payment_intent_id: intent.id,
+            reason: intent.metadata?.reason || 'Mobile money withdrawal',
+            depositor_name: intent.metadata?.depositor_name || null,
+            receiver_name: intent.metadata?.receiver_name || null,
             requested_amount_minor: amount,
             provider_amount_minor: providerTransaction.amountMinor ?? null,
             provider_currency: providerTransaction.currency ?? null,
             provider_fee_minor: providerTransaction.feeMinor ?? null,
           }),
+          intent.metadata?.reason || 'Mobile money withdrawal',
+          intent.metadata?.depositor_name || null,
+          intent.metadata?.receiver_name || null,
+          Number(intent.amount_minor),
+          Number.isSafeInteger(Number(intent.fee_calculation?.transactionChargesMinor))
+            ? Number(intent.fee_calculation.transactionChargesMinor)
+            : Number.isSafeInteger(providerTransaction.feeMinor) && providerTransaction.feeMinor >= 0
+              ? providerTransaction.feeMinor
+              : Number.isSafeInteger(Number(intent.provider_fee_minor)) && intent.provider_fee_confirmed
+                ? Number(intent.provider_fee_minor) : null,
           intent.created_by,
         ]
       );

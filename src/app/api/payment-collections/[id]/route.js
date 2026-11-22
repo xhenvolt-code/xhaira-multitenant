@@ -23,6 +23,8 @@ export async function GET(request, { params }) {
     const sync = await syncMobileMoneyIntent(intentId);
     const result = await getPool().query(
       `SELECT id, direction, amount_minor, provider_amount_minor, provider_fee_minor, ledger_amount_minor,
+              metadata->>'reason' AS reason, metadata->>'depositor_name' AS depositor_name,
+              metadata->>'receiver_name' AS receiver_name,
               provider_currency, provider_mode, currency, payment_method, status, provider_status,
               failure_reason, phone_masked, transaction_id, created_at, settled_at
          FROM payment_intents WHERE id = $1`,

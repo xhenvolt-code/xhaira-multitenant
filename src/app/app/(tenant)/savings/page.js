@@ -132,9 +132,9 @@ function TransactionModal({ account, action, paymentMethod = 'cash', onClose, on
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">{isWithdraw ? 'Receiver name' : 'Depositor name'}</label>
+            <label className="block text-sm font-medium mb-1">{isWithdraw ? 'Receiver name' : 'Deposited by (optional)'}</label>
             <input
-              type="text" required
+              type="text" required={isWithdraw}
               maxLength={255}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground"
               value={counterparty} onChange={e => setCounterparty(e.target.value)}

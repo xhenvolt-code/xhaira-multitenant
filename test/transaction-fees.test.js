@@ -17,6 +17,7 @@ test('deposit uses SACCO then platform then gateway and returns the specified ex
   assert.equal(result.providerRequestedMinor, 10200);
   assert.equal(result.marzpayFeeMinor, 306);
   assert.equal(result.totalCustomerChargeMinor, 10506);
+  assert.equal(result.providerChargesMinor, 506);
   assert.equal(result.expectedWalletCreditMinor, 10200);
   assert.equal(result.memberAmountCreditedMinor, 10000);
   assert.equal(result.xhenvoltRevenueMinor, 200);
@@ -32,6 +33,7 @@ test('withdrawal keeps the gateway wallet deduction separate from member debit',
   assert.equal(result.marzpayFeeMinor, 300);
   assert.equal(result.expectedWalletDeductionMinor, 10300);
   assert.equal(result.totalAccountDebitMinor, 10500);
+  assert.equal(result.providerChargesMinor, 500);
   assert.equal(result.memberAmountPaidMinor, 10000);
 });
 

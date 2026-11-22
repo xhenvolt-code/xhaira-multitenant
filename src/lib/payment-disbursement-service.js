@@ -25,7 +25,7 @@ function normalizeUgandaPhone(value) {
   return /^256[37]\d{8}$/.test(digits) ? `+${digits}` : null;
 }
 
-export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAccountId, idempotencyKey, userId, callbackUrl }) {
+export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAccountId, idempotencyKey, userId, callbackUrl, reason, receiverName }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
@@ -34,6 +34,10 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
   if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
+  if (!String(reason || '').trim() || String(reason).trim().length > 1000 ||
+      !String(receiverName || '').trim() || String(receiverName).trim().length > 255) {
+    return { ok: false, status: 400, error: 'Withdrawal reason and receiver name are required' };
+  }
 
   const pool = getPool();
   const existing = await pool.query(
@@ -86,9 +90,10 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
   }
   const settlementAccountId = settlementAccount.id;
   const accountCheck = await pool.query(
-    `SELECT a.id
+    `SELECT a.id, m.full_name
        FROM accounts a
        JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
+       JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
        WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
          AND ma.organization_id = public.current_organization_id()
          AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
@@ -96,6 +101,7 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
     [settlementAccountId, memberAccountId]
   );
   if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX member account; verify the organization settlement account in settings' };
+  const depositorName = accountCheck.rows[0].full_name;
 
   const client = await pool.connect();
   let intent;
@@ -139,11 +145,13 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
 
     const inserted = await client.query(
       `INSERT INTO payment_intents
-         (idempotency_key, direction, amount_minor, settlement_account_id, member_account_id, phone_masked, created_by)
-       VALUES ($1, 'disbursement', $2, $3, $4, $5, $6)
+         (idempotency_key, direction, amount_minor, settlement_account_id, member_account_id, phone_masked, metadata, created_by)
+       VALUES ($1, 'disbursement', $2, $3, $4, $5, $6::jsonb, $7)
        ON CONFLICT (organization_id, idempotency_key) DO NOTHING
        RETURNING id, provider_reference, status`,
-      [idempotencyKey, amountUgx, settlementAccountId, memberAccountId, `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, userId]
+      [idempotencyKey, amountUgx, settlementAccountId, memberAccountId,
+        `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`,
+        JSON.stringify({ reason: reason.trim(), depositor_name: depositorName, receiver_name: receiverName.trim() }), userId]
     );
     if (!inserted.rows[0]) {
       const conflictingIntent = await client.query(
