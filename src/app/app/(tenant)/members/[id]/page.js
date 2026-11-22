@@ -73,7 +73,7 @@ export default function MemberDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState(EMPTY_EDIT);
-  const memberPhoneVerification = useMarzpayPhoneVerification(editForm.phone, editing && member?.member_kind !== 'group');
+  const memberPhoneVerification = useMarzpayPhoneVerification(editing && member?.member_kind !== 'group');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showNewAccount, setShowNewAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ account_type_id: '', currency: 'UGX' });
@@ -587,9 +587,9 @@ export default function MemberDetailPage() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelClass}>Phone</label>
-                      <input value={editForm.phone} onChange={e => { memberPhoneVerification.onPhoneChange(e.target.value); setEditForm(f => ({ ...f, phone: e.target.value })); }} className={inputClass} />
+                      <input type="tel" inputMode="tel" autoComplete="tel" value={editForm.phone} onInput={e => { const phone = e.currentTarget.value; memberPhoneVerification.onPhoneInput(phone); setEditForm(f => ({ ...f, phone })); }} className={inputClass} />
                       <p className={`mt-1 text-xs ${memberPhoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
-                        {memberPhoneVerification.status === 'checking' ? 'Checking number with MarzPay…' : memberPhoneVerification.status === 'verified' ? `MarzPay verified: ${memberPhoneVerification.fullName}` : memberPhoneVerification.status === 'error' ? `${memberPhoneVerification.error}.` : 'Enter a complete Uganda number to verify the registered name.'}
+                        {memberPhoneVerification.status === 'checking' ? `Verifying ${memberPhoneVerification.phone} with MarzPay…` : memberPhoneVerification.status === 'verified' ? `MarzPay verified: ${memberPhoneVerification.fullName}` : memberPhoneVerification.status === 'error' ? `${memberPhoneVerification.error}.` : 'Enter a Uganda phone number to verify the registered name.'}
                       </p>
                       {memberPhoneVerification.status === 'verified' && <button type="button" onClick={() => {
                         const parts = memberPhoneVerification.fullName.split(/\s+/).filter(Boolean);

@@ -19,10 +19,7 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [configError, setConfigError] = useState('');
   const autoFilledName = useRef(false);
-  const phoneVerification = useMarzpayPhoneVerification(
-    form.phone,
-    memberKind === 'individual' && fields.some((field) => field.field_name === 'phone')
-  );
+  const phoneVerification = useMarzpayPhoneVerification(memberKind === 'individual' && fields.some((field) => field.field_name === 'phone'));
 
   useEffect(() => {
     if (phoneVerification.status !== 'verified' || !phoneVerification.fullName) return;
@@ -92,16 +89,17 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
       name: field.field_name,
       required: field.is_required,
       value: form[field.field_name] || '',
-      onChange: (event) => {
-        if (field.field_name === 'phone') phoneVerification.onPhoneChange(event.target.value);
+      onInput: field.field_name === 'phone' ? (event) => {
+        const value = event.currentTarget.value;
+        phoneVerification.onPhoneInput(value);
         if (field.field_name === 'phone' && autoFilledName.current) {
           autoFilledName.current = false;
-          setForm((previous) => ({ ...previous, phone: event.target.value, full_name: '' }));
+          setForm((previous) => ({ ...previous, phone: value, full_name: '' }));
           return;
         }
-        if (field.field_name === 'full_name') autoFilledName.current = false;
-        setForm((previous) => ({ ...previous, [field.field_name]: event.target.value }));
-      },
+        setForm((previous) => ({ ...previous, [field.field_name]: value }));
+      } : undefined,
+      onChange: field.field_name === 'phone' ? undefined : (event) => setForm((previous) => ({ ...previous, [field.field_name]: event.target.value })),
       className: inputClass,
     };
     let options = field.options;
@@ -119,9 +117,9 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
           const label = typeof option === 'object' ? option.label : option;
           return <option key={value} value={value}>{label}</option>;
         })}
-      </select> : <input {...common} type={type} />}
+      </select> : <input {...common} type={type} inputMode={field.field_type === 'phone' ? 'tel' : undefined} autoComplete={field.field_type === 'phone' ? 'tel' : undefined} />}
       {field.field_name === 'phone' && memberKind === 'individual' && <p className={`mt-1 text-xs ${phoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
-        {phoneVerification.status === 'checking' ? 'Checking number with MarzPay…' : phoneVerification.status === 'verified' ? `MarzPay verified: ${phoneVerification.fullName}` : phoneVerification.status === 'error' ? `${phoneVerification.error}. You can still enter the name manually.` : 'Enter a complete Uganda number to look up the registered name.'}
+        {phoneVerification.status === 'checking' ? `Verifying ${phoneVerification.phone} with MarzPay…` : phoneVerification.status === 'verified' ? `MarzPay verified: ${phoneVerification.fullName}` : phoneVerification.status === 'error' ? `${phoneVerification.error}. You can still enter the name manually.` : 'Enter a Uganda phone number to look up the registered name.'}
       </p>}
     </div>;
   };

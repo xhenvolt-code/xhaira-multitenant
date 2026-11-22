@@ -74,8 +74,6 @@ async function requestMarzpay(method, path, body, formData = false) {
   }
 }
 
-const phoneVerificationCache = new Map();
-
 function normalizeUgandaPhoneForVerification(value) {
   let digits = String(value || '').replace(/[\s()+-]/g, '');
   if (/^0[37]\d{8}$/.test(digits)) digits = `256${digits.slice(1)}`;
@@ -84,11 +82,11 @@ function normalizeUgandaPhoneForVerification(value) {
 }
 
 export async function verifyMarzpayPhone(value) {
-  const phoneNumber = normalizeUgandaPhoneForVerification(value);
-  if (!phoneNumber) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile number, for example 077… or +25677…' };
-
-  const cached = phoneVerificationCache.get(phoneNumber);
-  if (cached && cached.expiresAt > Date.now()) return { ...cached.result, cached: true };
+  const normalizedPhone = normalizeUgandaPhoneForVerification(value);
+  let phoneNumber = String(value || '').replace(/\D/g, '');
+  if (/^0[37]/.test(phoneNumber)) phoneNumber = `256${phoneNumber.slice(1)}`;
+  else if (/^[37]/.test(phoneNumber)) phoneNumber = `256${phoneNumber}`;
+  if (!phoneNumber) return { ok: false, status: 400, error: 'Enter a Uganda mobile number' };
 
   const response = await requestMarzpay('POST', '/phone-verification/verify', { phone_number: phoneNumber });
   const root = response.json || {};
@@ -103,18 +101,11 @@ export async function verifyMarzpayPhone(value) {
 
   const fullName = String(data.full_name || [data.first_name, data.last_name].filter(Boolean).join(' ')).trim().slice(0, 255);
   const verifiedPhone = normalizeUgandaPhoneForVerification(data.phone_number || root.phone_number || phoneNumber);
-  if (!fullName || verifiedPhone !== phoneNumber || String(data.verification_status || '').toLowerCase() !== 'verified') {
+  if (!normalizedPhone || !fullName || verifiedPhone !== normalizedPhone || String(data.verification_status || '').toLowerCase() !== 'verified') {
     return { ok: false, status: 502, error: 'MarzPay returned an incomplete phone verification result' };
   }
 
-  const result = { ok: true, phoneNumber, fullName, firstName: String(data.first_name || '').trim(), lastName: String(data.last_name || '').trim() };
-  phoneVerificationCache.set(phoneNumber, { result, expiresAt: Date.now() + 60 * 60 * 1000 });
-  if (phoneVerificationCache.size > 2000) {
-    const now = Date.now();
-    for (const [key, entry] of phoneVerificationCache) {
-      if (entry.expiresAt <= now || phoneVerificationCache.size > 1800) phoneVerificationCache.delete(key);
-    }
-  }
+  const result = { ok: true, phoneNumber: normalizedPhone, fullName, firstName: String(data.first_name || '').trim(), lastName: String(data.last_name || '').trim() };
   return result;
 }
 

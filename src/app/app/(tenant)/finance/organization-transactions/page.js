@@ -27,7 +27,7 @@ export default function OrganizationTransactionsPage() {
   const [activeCollection, setActiveCollection] = useState(null);
   const requestKey = useRef(null);
   const autoPayerName = useRef('');
-  const phoneVerification = useMarzpayPhoneVerification(form.phone, form.action === 'deposit' && form.payment_method === 'marzpay');
+  const phoneVerification = useMarzpayPhoneVerification(form.action === 'deposit' && form.payment_method === 'marzpay');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -178,14 +178,15 @@ export default function OrganizationTransactionsPage() {
             </select>
           </label>
           {form.action === 'deposit' && form.payment_method === 'marzpay' && <>
-            <label className="text-sm text-muted-foreground">Payer phone number *<input required type="tel" autoComplete="tel" value={form.phone || ''} onChange={e => {
-              const phone = e.target.value;
-              phoneVerification.onPhoneChange(phone);
-              setForm(current => ({ ...current, phone, ...(autoPayerName.current && current.paid_by === autoPayerName.current ? { paid_by: '' } : {}) }));
+            <label className="text-sm text-muted-foreground">Payer phone number *<input required type="tel" inputMode="numeric" autoComplete="tel" value={form.phone || ''} onInput={e => {
+              const phone = e.currentTarget.value;
+              phoneVerification.onPhoneInput(phone);
+              const previousAutoName = autoPayerName.current;
               autoPayerName.current = '';
+              setForm(current => ({ ...current, phone, ...(previousAutoName && current.paid_by === previousAutoName ? { paid_by: '' } : {}) }));
             }} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground" placeholder="07… or +2567…" /></label>
             <p className={`text-xs sm:col-span-2 lg:col-span-3 ${phoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
-              {phoneVerification.status === 'checking' ? 'Checking number with MarzPay…' : phoneVerification.status === 'verified' ? `MarzPay verified: ${phoneVerification.fullName}. The payer name has been filled in.` : phoneVerification.status === 'error' ? `${phoneVerification.error}. You can still continue and enter the payer name manually.` : 'A verified payer name will be filled in after you enter a complete Uganda number.'}
+              {phoneVerification.status === 'checking' ? `Verifying ${phoneVerification.phone} with MarzPay…` : phoneVerification.status === 'verified' ? `MarzPay verified: ${phoneVerification.fullName}. The payer name has been filled in.` : phoneVerification.status === 'error' ? `${phoneVerification.error}. You can still continue and enter the payer name manually.` : 'A verified payer name will be filled in after you enter a Uganda phone number.'}
             </p>
               <div className="flex items-end text-sm text-muted-foreground sm:col-span-2 lg:col-span-2">Money will be collected by MarzPay and credited to your configured UGX settlement account after the payer approves the phone prompt.</div>
           </>}
