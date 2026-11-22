@@ -87,10 +87,10 @@ export async function POST(request, { params }) {
     const accountTypeByCode = { VOL_SAV: 'savings', FIXED_SAV: 'fixed_deposit', FIXED_DEP: 'fixed_deposit', SHARES: 'shares', LOAN_ACC: 'loan', INVEST: 'investment' };
     const resolvedAccountType = accountTypeByCode[typeCode] || String(typeCode).toLowerCase();
 
-    // Generate CEV-TYPE-099 plus six random digits.
+    // Generate account number: CEVA-TYPE-099 plus six random digits.
     const typePrefix = String(typeCode).substring(0, 3).toUpperCase();
     const randomSuffix = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const account_number = `CEV-${typePrefix}-099${randomSuffix}`;
+    const account_number = `CEVA-${typePrefix}-099${randomSuffix}`;
 
     const result = await query(
       `INSERT INTO member_accounts (organization_id, member_id, account_type, account_number, currency, account_type_id, created_by)
