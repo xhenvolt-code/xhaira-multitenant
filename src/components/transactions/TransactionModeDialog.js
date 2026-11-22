@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Smartphone, Wallet, AlertTriangle, RefreshCw } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { formatCurrency } from '@/lib/format-currency';
+import { useMarzpayPhoneVerification } from '@/lib/use-marzpay-phone-verification';
 
 const FINAL_STATES = new Set(['settled', 'failed', 'expired', 'review']);
 
@@ -25,10 +26,21 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
   const [busy, setBusy] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState('');
+  const autoPartyName = useRef('');
+  const phoneVerification = useMarzpayPhoneVerification(step === 'automatic');
 
   const isDeposit = action === 'deposit';
   const automaticEnabled = isDeposit ? settings.collectionsEnabled : settings.disbursementsEnabled;
   const canWithdraw = account.allowsWithdrawal !== false;
+
+  useEffect(() => {
+    if (phoneVerification.status !== 'verified' || !phoneVerification.fullName) return;
+    setPartyName(current => {
+      if (current.trim() && current !== autoPartyName.current) return current;
+      autoPartyName.current = phoneVerification.fullName;
+      return phoneVerification.fullName;
+    });
+  }, [phoneVerification.status, phoneVerification.fullName]);
 
   useEffect(() => {
     let active = true;
@@ -164,8 +176,18 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
           {!isDeposit && settings.configured && automaticEnabled && <p className="text-xs text-muted-foreground">MarzPay disbursement access must be enabled for your merchant account. The savings ledger updates only after payout confirmation.</p>}
           <form onSubmit={startAutomatic} className="space-y-3">
             <label className="block text-sm">{isDeposit ? 'Payer phone' : 'Recipient phone'}
-              <input className={inputClass} required inputMode="tel" autoComplete="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="07xx xxx xxx" />
+              <input className={inputClass} required type="tel" inputMode="tel" autoComplete="tel" value={phone} onInput={e => {
+                const nextPhone = e.currentTarget.value;
+                phoneVerification.onPhoneInput(nextPhone);
+                const previousAutoName = autoPartyName.current;
+                autoPartyName.current = '';
+                setPhone(nextPhone);
+                if (previousAutoName && partyName === previousAutoName) setPartyName('');
+              }} placeholder="07xx xxx xxx" />
             </label>
+            <p className={`text-xs ${phoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
+              {phoneVerification.status === 'checking' ? `Verifying ${phoneVerification.phone} with MarzPay…` : phoneVerification.status === 'verified' ? `Verified by MarzPay: ${phoneVerification.fullName}` : phoneVerification.status === 'error' ? `${phoneVerification.error}. You can still enter the name manually.` : 'The name is verified with MarzPay as you type the phone number.'}
+            </p>
             <label className="block text-sm">Amount (UGX)
               <input className={inputClass} required type="number" min="1" step="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
             </label>
@@ -173,7 +195,7 @@ export default function TransactionModeDialog({ action, account, onClose, onManu
               <input className={inputClass} required maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} placeholder={isDeposit ? 'Reason for deposit' : 'Reason for withdrawal'} />
             </label>
             <label className="block text-sm">{isDeposit ? 'Deposited by (optional)' : 'Receiver name'}
-              <input className={inputClass} required={!isDeposit} maxLength={255} value={partyName} onChange={e => setPartyName(e.target.value)} placeholder={isDeposit ? 'Person making the payment' : 'Person receiving the payout'} />
+              <input className={inputClass} required={!isDeposit} maxLength={255} value={partyName} onChange={e => { autoPartyName.current = ''; setPartyName(e.target.value); }} placeholder={isDeposit ? 'Person making the payment' : 'Person receiving the payout'} />
             </label>
             {error && <p role="alert" className="flex items-start gap-2 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</p>}
             <div className="flex gap-2 pt-1">
