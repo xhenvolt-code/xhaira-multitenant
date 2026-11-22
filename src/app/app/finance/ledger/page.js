@@ -72,7 +72,7 @@ export default function LedgerPage() {
           <label className="block text-xs text-muted-foreground mb-1">Type</label>
           <select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))} className="px-3 py-1.5 border border-border rounded-lg text-sm bg-background text-foreground">
             <option value="">All types</option>
-            {['payment','expense','transfer','adjustment','initial_balance'].map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+            {['deposit','withdrawal','payment','expense','transfer','adjustment','initial_balance'].map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
           </select>
         </div>
         <div>
@@ -111,7 +111,16 @@ export default function LedgerPage() {
                 return (
                   <tr key={e.id} className="hover:bg-muted">
                     <td className="px-4 py-3 text-muted-foreground">{new Date(e.created_at).toLocaleDateString()}</td>
-                    <td className="px-4 py-3 text-foreground">{e.description || '—'}</td>
+                    <td className="px-4 py-3 text-foreground">
+                      <div>{e.metadata?.reason || e.description || '—'}</div>
+                      {(e.metadata?.paid_by || e.metadata?.withdrawn_to || e.created_by_name) && (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {e.metadata?.paid_by ? `Paid by ${e.metadata.paid_by}` : e.metadata?.withdrawn_to ? `Withdrawn to ${e.metadata.withdrawn_to}` : ''}
+                          {(e.metadata?.paid_by || e.metadata?.withdrawn_to) && e.created_by_name ? ' · ' : ''}
+                          {e.created_by_name ? `Recorded by ${e.created_by_name}` : ''}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">{e.account_name || '—'}</td>
                     <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-xs bg-muted text-muted-foreground capitalize">{e.type?.replace(/_/g,' ')}</span></td>
                     <td className={`px-4 py-3 text-right font-medium ${isCredit ? 'text-emerald-600' : 'text-red-600'}`}>

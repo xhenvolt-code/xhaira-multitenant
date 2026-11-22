@@ -89,6 +89,10 @@ export async function createTransaction({
   const pool = getPool();
   const ownsClient = !transactionClient;
   const client = transactionClient || await pool.connect();
+  const transactionMetadata = {
+    ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+    reason: metadata?.reason || description,
+  };
 
   try {
     if (ownsClient) await client.query('BEGIN');
@@ -142,7 +146,7 @@ export async function createTransaction({
     const txResult = await client.query(
       `INSERT INTO transactions (description, transaction_type, reference, metadata, created_by)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [description, transaction_type || null, reference || null, JSON.stringify(metadata || {}), userId]
+      [description, transaction_type || null, reference || null, JSON.stringify(transactionMetadata), userId]
     );
     const transaction = txResult.rows[0];
 
@@ -236,7 +240,7 @@ export async function getMemberAccountBalance(memberAccountId) {
 /**
  * Deposit money into a member account (from SACCO cash)
  */
-export async function deposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash' }) {
+export async function deposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', reason, paidBy }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -247,7 +251,11 @@ export async function deposit({ memberAccountId, amount, description, reference,
       description: description || 'Member deposit',
       transaction_type: 'deposit',
       reference,
-      metadata: { payment_method: paymentMethod },
+      metadata: {
+        payment_method: paymentMethod,
+        reason: reason || description || 'Member deposit',
+        paid_by: paidBy || null,
+      },
       userId,
       entries: [
         { member_account_id: memberAccountId, type: 'CREDIT', amount },
@@ -263,7 +271,7 @@ export async function deposit({ memberAccountId, amount, description, reference,
 /**
  * Withdraw money from a member account (to SACCO cash)
  */
-export async function withdraw({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', force = false }) {
+export async function withdraw({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', force = false, reason, withdrawnTo }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -304,7 +312,11 @@ export async function withdraw({ memberAccountId, amount, description, reference
       description: description || 'Member withdrawal',
       transaction_type: 'withdrawal',
       reference,
-      metadata: { payment_method: paymentMethod },
+      metadata: {
+        payment_method: paymentMethod,
+        reason: reason || description || 'Member withdrawal',
+        withdrawn_to: withdrawnTo || null,
+      },
       userId,
       entries: [
         { member_account_id: memberAccountId, type: 'DEBIT', amount },

@@ -38,10 +38,13 @@ export async function GET(request) {
 
     if (accountId) {
       params.push(accountId);
-      where += ` AND t.id IN (
+      where += ` AND (t.id IN (
         SELECT le.transaction_id FROM ledger_entries le
          WHERE le.organization_id = $1 AND le.account_id = $${params.length}
-      )`;
+      ) OR t.id IN (
+        SELECT l.source_id FROM ledger l
+         WHERE l.organization_id = $1 AND l.account_id = $${params.length} AND l.source_id IS NOT NULL
+      ))`;
     }
 
     const countParams = [...params];
@@ -49,17 +52,26 @@ export async function GET(request) {
 
     const [dataResult, countResult] = await Promise.all([
       query(
-        `SELECT t.*, u.email as created_by_email,
-           json_agg(json_build_object(
+        `SELECT t.*, u.email as created_by_email, u.name as created_by_name,
+           COALESCE(json_agg(json_build_object(
              'id', le.id, 'entry_type', le.entry_type, 'amount', le.amount,
              'account_id', le.account_id, 'member_account_id', le.member_account_id,
              'description', le.description
-           ) ORDER BY le.entry_type) as entries
+           ) ORDER BY le.entry_type) FILTER (WHERE le.id IS NOT NULL),
+           (SELECT json_agg(json_build_object(
+              'id', l.id,
+              'entry_type', CASE WHEN l.amount < 0 THEN 'DEBIT' ELSE 'CREDIT' END,
+              'amount', ABS(l.amount), 'account_id', l.account_id,
+              'member_account_id', NULL, 'description', l.description,
+              'account_name', a.name, 'currency', l.currency
+            )) FROM ledger l JOIN accounts a ON a.id = l.account_id AND a.organization_id = l.organization_id
+             WHERE l.organization_id = t.organization_id AND l.source_id = t.id),
+           '[]'::json) as entries
          FROM transactions t
          LEFT JOIN users u ON t.created_by = u.id AND u.organization_id = $1
          LEFT JOIN ledger_entries le ON le.transaction_id = t.id AND le.organization_id = $1
          ${where}
-         GROUP BY t.id, u.email
+         GROUP BY t.id, u.email, u.name
          ORDER BY t.created_at DESC
          LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
@@ -91,7 +103,13 @@ export async function POST(request) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
-    const { action, member_account_id, account_id, amount, description, reference, entries, transaction_type, metadata } = body;
+    const { action, member_account_id, account_id, amount, description, reference, entries, transaction_type, metadata, reason, paid_by, withdrawn_to } = body;
+    const transactionMetadata = {
+      ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+      ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim().slice(0, 1000) } : {}),
+      ...(typeof paid_by === 'string' && paid_by.trim() ? { paid_by: paid_by.trim().slice(0, 255) } : {}),
+      ...(typeof withdrawn_to === 'string' && withdrawn_to.trim() ? { withdrawn_to: withdrawn_to.trim().slice(0, 255) } : {}),
+    };
 
     if (!amount && !entries) {
       return NextResponse.json({ success: false, error: 'amount or entries required' }, { status: 400 });
@@ -108,6 +126,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount: parseFloat(amount),
         description,
+        reason,
+        paidBy: paid_by,
         reference,
         userId: perm.auth.userId,
       });
@@ -119,6 +139,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount: parseFloat(amount),
         description,
+        reason,
+        withdrawnTo: withdrawn_to,
         reference,
         userId: perm.auth.userId,
       });
@@ -128,7 +150,7 @@ export async function POST(request) {
         description: description || 'Manual transaction',
         transaction_type: transaction_type || 'adjustment',
         reference,
-        metadata,
+        metadata: transactionMetadata,
         userId: perm.auth.userId,
         entries: entries.map(e => ({
           ...e,

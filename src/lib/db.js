@@ -22,6 +22,7 @@ export function isDatabaseConnectionError(error) {
  */
 let pool = null;
 let tenantAwarePool = null;
+let platformAwarePool = null;
 let poolInitAttempts = 0;
 
 /**
@@ -181,6 +182,59 @@ export function getPool() {
     };
   }
   return tenantAwarePool;
+}
+
+/**
+ * Separate privileged connection for Xhenvolt platform services.
+ * Callers must authenticate a platform session before using this pool. The
+ * PostgreSQL role is granted only to this server-side database login and is
+ * used exclusively by /api/platform/* handlers; institution handlers continue
+ * to use the tenant-scoped xhaira_runtime role above.
+ */
+export function getPlatformPool() {
+  if (!pool) initializePool();
+  if (!platformAwarePool) {
+    platformAwarePool = {
+      connect: async () => {
+        const client = await pool.connect();
+        const releaseClient = client.release.bind(client);
+        try {
+          await client.query('SET ROLE xhaira_platform_runtime');
+          await client.query("SELECT set_config('app.organization_id', '', false)");
+        } catch (error) {
+          releaseClient(error);
+          throw error;
+        }
+        let releasePromise;
+        client.release = (error) => {
+          if (!releasePromise) {
+            releasePromise = (async () => {
+              try {
+                await client.query("SELECT set_config('app.organization_id', '', false)");
+                await client.query('RESET ROLE');
+                releaseClient(error);
+              } catch (resetError) {
+                releaseClient(resetError);
+              }
+            })();
+          }
+          return releasePromise;
+        };
+        return client;
+      },
+      query: async (...args) => {
+        const client = await platformAwarePool.connect();
+        try { return await client.query(...args); }
+        finally { await client.release(); }
+      },
+      end: () => pool.end(),
+    };
+  }
+  return platformAwarePool;
+}
+
+export async function queryPlatform(sql, params = []) {
+  return getPlatformPool().query(sql, params);
 }
 
 /**

@@ -152,6 +152,7 @@ export const menuItems = [
       { label: 'Overview',          href: '/app/finance',              description: 'Financial dashboard',               permission: 'finance.view' },
       { label: 'Accounts',          href: '/app/finance/accounts',     description: 'Bank and cash accounts',            permission: 'accounts.view' },
       { label: 'Ledger',            href: '/app/finance/ledger',       description: 'Transaction history',               permission: 'finance.view' },
+      { label: 'Organization transactions', href: '/app/finance/organization-transactions', description: 'Direct organization deposits and withdrawals', permission: 'finance.view' },
       { label: 'Expenses',          href: '/app/finance/expenses',     description: 'Track spending',                    permission: 'expenses.view' },
       { label: 'Transfers',         href: '/app/finance/transfers',    description: 'Move between accounts',             permission: 'finance.view' },
       { label: 'Budgets',           href: '/app/finance/budgets',      description: 'Spending limits & controls',        permission: 'budgets.view' },

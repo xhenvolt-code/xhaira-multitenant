@@ -80,7 +80,7 @@ export async function POST(request) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
-    const { action, member_account_id, amount, description, reference, force } = body;
+    const { action, member_account_id, amount, description, reference, force, paid_by, withdrawn_to, reason } = body;
     const paymentMethod = body.payment_method || 'cash';
     if (!['cash', 'card', 'bank_transfer', 'check'].includes(paymentMethod)) {
       return NextResponse.json({ success: false, error: 'payment_method must be cash, card, bank_transfer, or check' }, { status: 400 });
@@ -113,6 +113,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount:          amountValue,
         description,
+        reason: reason || description,
+        paidBy: typeof paid_by === 'string' ? paid_by.trim().slice(0, 255) : null,
         reference,
         userId:          perm.auth.userId,
         paymentMethod,
@@ -124,6 +126,8 @@ export async function POST(request) {
         memberAccountId: member_account_id,
         amount:          amountValue,
         description,
+        reason: reason || description,
+        withdrawnTo: typeof withdrawn_to === 'string' ? withdrawn_to.trim().slice(0, 255) : null,
         reference,
         userId:          perm.auth.userId,
         force:           isSuperAdmin && force === true,

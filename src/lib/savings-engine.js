@@ -35,7 +35,7 @@ import { validateWithdrawal } from '@/lib/account-rules-engine.js';
  * @param {string} [params.userId]       - staff user executing the transaction
  * @returns {Promise<{ transaction, entries, balance: number }>}
  */
-export async function savingsDeposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash' }) {
+export async function savingsDeposit({ memberAccountId, amount, description, reference, userId, paymentMethod = 'cash', reason, paidBy }) {
   if (!memberAccountId) throw new Error('memberAccountId is required');
   if (!amount || amount <= 0) throw new Error('amount must be a positive number');
 
@@ -46,6 +46,8 @@ export async function savingsDeposit({ memberAccountId, amount, description, ref
     reference,
     userId,
     paymentMethod,
+    reason,
+    paidBy,
   });
 
   const balance = await getMemberAccountBalance(memberAccountId);
@@ -67,7 +69,7 @@ export async function savingsDeposit({ memberAccountId, amount, description, ref
  * @param {boolean}[params.force=false]  - bypass rule validation (superadmin only)
  * @returns {Promise<{ transaction, entries, balance: number }>}
  */
-export async function savingsWithdraw({ memberAccountId, amount, description, reference, userId, force = false, paymentMethod = 'cash' }) {
+export async function savingsWithdraw({ memberAccountId, amount, description, reference, userId, force = false, paymentMethod = 'cash', reason, withdrawnTo }) {
   if (!memberAccountId) throw new Error('memberAccountId is required');
   if (!amount || amount <= 0) throw new Error('amount must be a positive number');
 
@@ -90,6 +92,8 @@ export async function savingsWithdraw({ memberAccountId, amount, description, re
     userId,
     paymentMethod,
     force,
+    reason,
+    withdrawnTo,
   });
 
   const balance = await getMemberAccountBalance(memberAccountId);

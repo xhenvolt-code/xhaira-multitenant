@@ -30,6 +30,10 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   const total = totalLines.reduce((sum, line) => sum + Math.abs(Number(line.amount || 0)), 0);
   const totalCurrency = totalLines[0]?.currency || lines[0]?.currency || 'UGX';
   const details = metadata.payment_method || metadata.provider || '';
+  const reasonRow = metadata.reason ? `<div><span>Reason</span>${escapeHtml(metadata.reason)}</div>` : '';
+  const payerRow = metadata.paid_by ? `<div><span>Paid by</span>${escapeHtml(metadata.paid_by)}</div>` : '';
+  const recipientRow = metadata.withdrawn_to ? `<div><span>Withdrawn to</span>${escapeHtml(metadata.withdrawn_to)}</div>` : '';
+  const classificationRow = metadata.classification ? `<div><span>Classification</span>${escapeHtml(metadata.classification)}</div>` : '';
   const installmentRows = installments.map((item) => `<tr><td>Installment ${escapeHtml(item.installment_number)}</td><td>${escapeHtml(item.status)}</td><td class="amount">${escapeHtml(formatAmount(item.paid_amount))}</td></tr>`).join('');
   const phone = organization.contact_phones || '';
   const email = organization.contact_email || '';
@@ -63,7 +67,7 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   </div><div class="receipt"><strong>RECEIPT</strong><span>${escapeHtml(receiptNumber)}</span></div></header>
   <section class="summary"><div><span>Transaction</span>${escapeHtml(type)}</div><div><span>Date and time</span>${escapeHtml(date)}</div>
   <div><span>Recorded by</span>${escapeHtml(creator || 'System')}</div><div><span>Reference</span>${escapeHtml(reference || '—')}</div>
-  ${details ? `<div><span>Payment channel</span>${escapeHtml(details)}</div>` : ''}</section>
+  ${details ? `<div><span>Payment channel</span>${escapeHtml(details)}</div>` : ''}${reasonRow}${payerRow}${recipientRow}${classificationRow}</section>
   <table><thead><tr><th>Description</th><th>Account / Member</th><th>Entry</th><th class="amount">Amount</th></tr></thead>
   <tbody>${rows || '<tr><td colspan="4">No ledger lines found</td></tr>'}</tbody></table>
   ${installmentRows ? `<h2>Loan installment status</h2><table><thead><tr><th>Installment</th><th>Status after this payment</th><th class="amount">Cumulative paid</th></tr></thead><tbody>${installmentRows}</tbody></table>` : ''}
@@ -108,7 +112,18 @@ export async function GET(request, { params }) {
             WHERE le.organization_id = $1 AND le.transaction_id = $2
             ORDER BY le.created_at, le.id`, [auth.organizationId, transaction.id]
         );
-        const lines = entryResult.rows.map((line) => ({ ...line, account_name: line.member_name || line.account_name || line.member_account }));
+        let lines = entryResult.rows.map((line) => ({ ...line, account_name: line.member_name || line.account_name || line.member_account }));
+        if (lines.length === 0 && transaction.metadata?.transaction_scope === 'organization') {
+          const organizationLedger = await query(
+            `SELECT l.amount, l.currency, l.description, a.name AS account_name,
+                    CASE WHEN l.amount < 0 THEN 'DEBIT' ELSE 'CREDIT' END AS entry_type
+               FROM public.ledger l
+               JOIN public.accounts a ON a.id = l.account_id AND a.organization_id = l.organization_id
+              WHERE l.organization_id = $1 AND l.source_id = $2
+              ORDER BY l.created_at, l.id`, [auth.organizationId, transaction.id]
+          );
+          lines = organizationLedger.rows;
+        }
         const installmentResult = transaction.transaction_type === 'loan_repayment'
           ? await query(
             `SELECT installment_number, paid_amount, total_amount, status

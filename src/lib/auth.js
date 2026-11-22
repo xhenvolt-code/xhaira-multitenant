@@ -228,6 +228,14 @@ export async function verifyCredentials(email, password) {
       return { error: 'ACCOUNT_SUSPENDED', message: 'Your account has been suspended. Contact an administrator.' };
     }
 
+    const organizationStatus = await query(
+      'SELECT public.organization_status_for_user($1) AS status',
+      [user.id]
+    );
+    if (organizationStatus.rows[0]?.status !== 'active') {
+      return { error: 'ORGANIZATION_SUSPENDED', message: 'This institution is not currently active. Contact Xhenvolt support.' };
+    }
+
     const isPasswordValid = await comparePassword(password, user.password_hash);
 
     if (!isPasswordValid) {

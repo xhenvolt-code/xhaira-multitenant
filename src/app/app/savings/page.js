@@ -38,6 +38,7 @@ function BehaviorBadge({ label, enabled }) {
 function TransactionModal({ account, action, paymentMethod = 'cash', onClose, onSuccess }) {
   const [amount,      setAmount]      = useState('');
   const [description, setDescription] = useState('');
+  const [counterparty, setCounterparty] = useState('');
   const [reference,   setReference]   = useState('');
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState('');
@@ -56,6 +57,9 @@ function TransactionModal({ account, action, paymentMethod = 'cash', onClose, on
           member_account_id: account.member_account_id,
           amount:            parseFloat(amount),
           description,
+          reason: description,
+          paid_by: action === 'deposit' ? counterparty : undefined,
+          withdrawn_to: action === 'withdraw' ? counterparty : undefined,
           reference,
           payment_method: paymentMethod,
         }),
@@ -119,12 +123,22 @@ function TransactionModal({ account, action, paymentMethod = 'cash', onClose, on
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Description</label>
+            <label className="block text-sm font-medium mb-1">Reason</label>
             <input
               type="text"
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground"
               value={description} onChange={e => setDescription(e.target.value)}
               placeholder={isWithdraw ? 'Reason for withdrawal' : 'Deposit source'}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">{isWithdraw ? 'Recipient / withdrawn to (optional)' : 'Paid by (optional)'}</label>
+            <input
+              type="text"
+              maxLength={255}
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground"
+              value={counterparty} onChange={e => setCounterparty(e.target.value)}
+              placeholder={isWithdraw ? 'Person receiving the funds' : 'Person or organization making the payment'}
             />
           </div>
           <div>

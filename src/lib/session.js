@@ -66,6 +66,10 @@ export async function getSession(sessionId) {
       return null;
     }
 
+    // Platform suspension invalidates institutional access even if a browser
+    // still holds an otherwise valid organization session cookie.
+    if (row.organizationStatus && row.organizationStatus !== 'active') return null;
+
     enterOrganizationContext(row.organizationId);
 
     // Enforce inactivity timeout

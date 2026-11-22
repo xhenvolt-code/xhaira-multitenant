@@ -80,6 +80,7 @@ export async function POST(request) {
         ACCOUNT_PENDING: 'Your account is pending admin activation.',
         ACCOUNT_SUSPENDED: 'Your account has been suspended.',
         ACCOUNT_DISABLED: 'Your account has been disabled.',
+        ORGANIZATION_SUSPENDED: 'This institution is not currently active. Contact Xhenvolt support.',
       };
 
       return NextResponse.json(

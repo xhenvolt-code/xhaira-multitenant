@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
-import { dispatch } from '@/lib/system-events.js';
+import { dispatch, withTransaction } from '@/lib/system-events.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
@@ -82,38 +82,39 @@ export async function POST(request) {
       [to_account_id, auth.organizationId]
     );
 
-    const transferResult = await query(
-      `INSERT INTO public.transfers (organization_id, from_account_id, to_account_id, amount, currency, to_amount, to_currency, exchange_rate, description, reference, transfer_date, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',$12) RETURNING *`,
-      [auth.organizationId, from_account_id, to_account_id, amount, currency||'UGX', to_amount||null, to_currency||null,
-       exchange_rate||null, description||null, reference||null, txDate, auth.userId]
-    );
-
-    const transfer = transferResult.rows[0];
     const fromName = fromAcct.rows[0]?.name || 'Unknown';
     const toName = toAcct.rows[0]?.name || 'Unknown';
+    const transfer = await withTransaction(async (client) => {
+      const transferResult = await client.query(
+        `INSERT INTO public.transfers (organization_id, from_account_id, to_account_id, amount, currency, to_amount, to_currency, exchange_rate, description, reference, transfer_date, status, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'completed',$12) RETURNING *`,
+        [auth.organizationId, from_account_id, to_account_id, amount, currency||'UGX', to_amount||null, to_currency||null,
+         exchange_rate||null, description||null, reference||null, txDate, auth.userId]
+      );
+      const newTransfer = transferResult.rows[0];
 
-    // Create DEBIT ledger entry (money out of from_account)
-    const debitResult = await query(
-      `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
-       VALUES ($1,$2,$3,$4,'transfer_out',$5,$6,'transfer',$7,$8) RETURNING id`,
-      [auth.organizationId, from_account_id, -Math.abs(amount), currency||'UGX', transfer.id,
-       `Transfer to ${toName}${description ? ': ' + description : ''}`, txDate, auth.userId]
-    );
+      const debitResult = await client.query(
+        `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
+         VALUES ($1,$2,$3,$4,'transfer_out',$5,$6,'transfer',$7,$8) RETURNING id`,
+        [auth.organizationId, from_account_id, -Math.abs(amount), currency||'UGX', newTransfer.id,
+         `Transfer to ${toName}${description ? ': ' + description : ''}`, txDate, auth.userId]
+      );
 
-    // Create CREDIT ledger entry (money into to_account)
-    const creditAmount = to_amount || amount;
-    const creditCurrency = to_currency || currency || 'UGX';
-    const creditResult = await query(
-      `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
-       VALUES ($1,$2,$3,$4,'transfer_in',$5,$6,'transfer',$7,$8) RETURNING id`,
-      [auth.organizationId, to_account_id, Math.abs(creditAmount), creditCurrency, transfer.id,
-       `Transfer from ${fromName}${description ? ': ' + description : ''}`, txDate, auth.userId]
-    );
+      const creditAmount = to_amount || amount;
+      const creditCurrency = to_currency || currency || 'UGX';
+      const creditResult = await client.query(
+        `INSERT INTO public.ledger (organization_id, account_id, amount, currency, source_type, source_id, description, category, entry_date, created_by)
+         VALUES ($1,$2,$3,$4,'transfer_in',$5,$6,'transfer',$7,$8) RETURNING id`,
+        [auth.organizationId, to_account_id, Math.abs(creditAmount), creditCurrency, newTransfer.id,
+         `Transfer from ${fromName}${description ? ': ' + description : ''}`, txDate, auth.userId]
+      );
 
-    // Link ledger entries back to transfer
-    await query(`UPDATE public.transfers SET ledger_debit_id = $1, ledger_credit_id = $2 WHERE id = $3 AND organization_id = $4`,
-      [debitResult.rows[0].id, creditResult.rows[0].id, transfer.id, auth.organizationId]);
+      await client.query(
+        `UPDATE public.transfers SET ledger_debit_id = $1, ledger_credit_id = $2 WHERE id = $3 AND organization_id = $4`,
+        [debitResult.rows[0].id, creditResult.rows[0].id, newTransfer.id, auth.organizationId]
+      );
+      return newTransfer;
+    });
 
     dispatch('transfer_completed', { entityType: 'transfer', entityId: transfer.id, description: `Transfer: ${currency || 'UGX'} ${Number(amount).toLocaleString()} from ${fromName} to ${toName}`, metadata: { amount, currency: currency || 'UGX', from: fromName, to: toName }, actorId: auth.userId }).catch(() => {});
 

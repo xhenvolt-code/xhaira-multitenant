@@ -19,7 +19,11 @@ export async function GET(request) {
     const to_date = searchParams.get('to_date');
     const limit = Math.min(500, Math.max(1, Number.parseInt(searchParams.get('limit') || '100', 10) || 100));
     const offset = Math.max(0, Number.parseInt(searchParams.get('offset') || '0', 10) || 0);
-    let sql = `SELECT l.*, a.name as account_name, a.type as account_type FROM ledger l JOIN accounts a ON l.account_id = a.id AND a.organization_id = l.organization_id WHERE l.organization_id = $1`;
+    let sql = `SELECT l.*, a.name as account_name, a.type as account_type, u.name AS created_by_name
+                 FROM ledger l
+                 JOIN accounts a ON l.account_id = a.id AND a.organization_id = l.organization_id
+                 LEFT JOIN users u ON u.id = l.created_by AND u.organization_id = l.organization_id
+                WHERE l.organization_id = $1`;
     const params = [auth.organizationId];
     if (account_id) { params.push(account_id); sql += ` AND l.account_id = $${params.length}`; }
     if (source_type) { params.push(source_type); sql += ` AND l.source_type = $${params.length}`; }
