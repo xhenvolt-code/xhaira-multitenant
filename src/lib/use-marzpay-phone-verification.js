@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 
 function toUgandaPhone(value) {
@@ -13,13 +13,20 @@ function toUgandaPhone(value) {
 export function useMarzpayPhoneVerification(phone, enabled = true) {
   const [verification, setVerification] = useState({ status: 'idle', fullName: '', error: '' });
   const normalizedPhone = toUgandaPhone(phone);
+  const requestVersion = useRef(0);
+
+  const onPhoneChange = useCallback((value) => {
+    requestVersion.current += 1;
+    if (enabled && toUgandaPhone(value)) setVerification({ status: 'checking', fullName: '', error: '' });
+    else setVerification({ status: 'idle', fullName: '', error: '' });
+  }, [enabled]);
 
   useEffect(() => {
+    const requestId = ++requestVersion.current;
     if (!enabled || !normalizedPhone) {
       setVerification({ status: 'idle', fullName: '', error: '' });
       return undefined;
     }
-    let cancelled = false;
     setVerification({ status: 'checking', fullName: '', error: '' });
     const timer = setTimeout(async () => {
       try {
@@ -30,13 +37,16 @@ export function useMarzpayPhoneVerification(phone, enabled = true) {
         });
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || 'MarzPay could not verify this number');
-        if (!cancelled) setVerification({ status: 'verified', fullName: result.data.fullName, error: '' });
+        if (requestId === requestVersion.current) setVerification({ status: 'verified', fullName: result.data.fullName, error: '' });
       } catch (error) {
-        if (!cancelled) setVerification({ status: 'error', fullName: '', error: error.message || 'Phone verification failed' });
+        if (requestId === requestVersion.current) setVerification({ status: 'error', fullName: '', error: error.message || 'Phone verification failed' });
       }
     }, 600);
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => {
+      clearTimeout(timer);
+      if (requestVersion.current === requestId) requestVersion.current += 1;
+    };
   }, [enabled, normalizedPhone]);
 
-  return verification;
+  return { ...verification, onPhoneChange };
 }

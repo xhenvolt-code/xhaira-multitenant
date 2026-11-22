@@ -93,6 +93,7 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
       required: field.is_required,
       value: form[field.field_name] || '',
       onChange: (event) => {
+        if (field.field_name === 'phone') phoneVerification.onPhoneChange(event.target.value);
         if (field.field_name === 'phone' && autoFilledName.current) {
           autoFilledName.current = false;
           setForm((previous) => ({ ...previous, phone: event.target.value, full_name: '' }));

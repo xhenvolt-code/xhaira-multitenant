@@ -180,6 +180,7 @@ export default function OrganizationTransactionsPage() {
           {form.action === 'deposit' && form.payment_method === 'marzpay' && <>
             <label className="text-sm text-muted-foreground">Payer phone number *<input required type="tel" autoComplete="tel" value={form.phone || ''} onChange={e => {
               const phone = e.target.value;
+              phoneVerification.onPhoneChange(phone);
               setForm(current => ({ ...current, phone, ...(autoPayerName.current && current.paid_by === autoPayerName.current ? { paid_by: '' } : {}) }));
               autoPayerName.current = '';
             }} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground" placeholder="07… or +2567…" /></label>

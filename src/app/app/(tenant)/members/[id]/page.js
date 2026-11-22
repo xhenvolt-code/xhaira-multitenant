@@ -587,7 +587,7 @@ export default function MemberDetailPage() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelClass}>Phone</label>
-                      <input value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} className={inputClass} />
+                      <input value={editForm.phone} onChange={e => { memberPhoneVerification.onPhoneChange(e.target.value); setEditForm(f => ({ ...f, phone: e.target.value })); }} className={inputClass} />
                       <p className={`mt-1 text-xs ${memberPhoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
                         {memberPhoneVerification.status === 'checking' ? 'Checking number with MarzPay…' : memberPhoneVerification.status === 'verified' ? `MarzPay verified: ${memberPhoneVerification.fullName}` : memberPhoneVerification.status === 'error' ? `${memberPhoneVerification.error}.` : 'Enter a complete Uganda number to verify the registered name.'}
                       </p>
