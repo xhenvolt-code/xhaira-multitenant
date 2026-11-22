@@ -27,7 +27,7 @@ export default function PaymentsPage() {
   const [collectionCheckErrors, setCollectionCheckErrors] = useState({});
   const [members, setMembers] = useState([]);
   const [memberAccounts, setMemberAccounts] = useState([]);
-  const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', phone: '', amountUgx: '' });
+  const [collectionForm, setCollectionForm] = useState({ memberId: '', memberAccountId: '', phone: '', depositorName: '', reason: '', amountUgx: '' });
   const [collectionIntent, setCollectionIntent] = useState(null);
   const [collectionBusy, setCollectionBusy] = useState(false);
   const [collectionRechecking, setCollectionRechecking] = useState(false);
@@ -86,6 +86,9 @@ export default function PaymentsPage() {
           amountUgx: Number(collectionForm.amountUgx),
           phone: collectionForm.phone,
           memberAccountId: collectionForm.memberAccountId,
+          depositorName: collectionForm.depositorName,
+          receiverName: members.find(member => member.id === collectionForm.memberId)?.full_name || '',
+          reason: collectionForm.reason,
         }),
       });
       if (!result.success) {
@@ -220,6 +223,14 @@ export default function PaymentsPage() {
           <label className="text-sm text-muted-foreground">
             Payer phone
             <input required inputMode="tel" autoComplete="tel" value={collectionForm.phone} onChange={event => setCollectionForm(form => ({ ...form, phone: event.target.value }))} placeholder="07xx xxx xxx" className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Depositor name
+            <input required maxLength={255} value={collectionForm.depositorName} onChange={event => setCollectionForm(form => ({ ...form, depositorName: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
+          </label>
+          <label className="text-sm text-muted-foreground">
+            Deposit reason
+            <input required maxLength={1000} value={collectionForm.reason} onChange={event => setCollectionForm(form => ({ ...form, reason: event.target.value }))} className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-foreground" />
           </label>
           <label className="text-sm text-muted-foreground">
             Amount (UGX)

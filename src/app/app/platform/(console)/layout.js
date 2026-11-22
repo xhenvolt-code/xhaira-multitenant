@@ -5,18 +5,18 @@ import { getPlatformSession, PLATFORM_COOKIE } from '@/lib/platform/auth.js';
 import PlatformSignOut from '@/components/platform/PlatformSignOut.js';
 
 const links = [
-  ['/platform/dashboard', 'Overview'],
-  ['/platform/institutions', 'Institutions'],
-  ['/platform/transactions', 'Transactions'],
-  ['/platform/funding', 'Funding & settlements'],
-  ['/platform/administrators', 'Platform administrators'],
-  ['/platform/audit', 'Audit trail'],
+  ['/app/platform/dashboard', 'Overview'],
+  ['/app/platform/institutions', 'Institutions'],
+  ['/app/platform/transactions', 'Transactions'],
+  ['/app/platform/funding', 'Funding & settlements'],
+  ['/app/platform/administrators', 'Platform administrators'],
+  ['/app/platform/audit', 'Audit trail'],
 ];
 
 export default async function PlatformConsoleLayout({ children }) {
   const cookieStore = await cookies();
   const session = await getPlatformSession(cookieStore.get(PLATFORM_COOKIE)?.value);
-  if (!session) redirect('/platform/login');
+  if (!session) redirect('/app/platform/login');
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 lg:flex">
       <aside className="border-b border-slate-800 bg-slate-900 lg:min-h-screen lg:w-64 lg:border-b-0 lg:border-r">

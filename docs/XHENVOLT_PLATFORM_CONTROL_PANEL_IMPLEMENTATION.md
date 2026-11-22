@@ -4,7 +4,7 @@ Updated: 2026-11-22
 
 ## Implemented
 
-- Isolated `/platform` console and `/platform/login` bootstrap/login flow with a dedicated HttpOnly, SameSite strict cookie, scrypt password hashes, hashed random session tokens, eight-hour sessions, login throttling and same-origin checks.
+- Isolated `/app/platform` console and `/app/platform/login` bootstrap/login flow with a dedicated HttpOnly, SameSite strict cookie, scrypt password hashes, hashed random session tokens, eight-hour sessions, login throttling and same-origin checks.
 - Separate `xhaira_platform_runtime` database role and server-only query pool. Institution APIs remain tenant scoped. Platform APIs use the separate role after platform-session validation.
 - Dashboard metrics based on institution, member, account, ledger, settled payment fee and platform operation records. Amounts remain grouped by currency; transaction volume is identified separately from revenue.
 - Institution directory and detail pages, account balances, activity, and reasoned suspend/reactivate actions. Suspending revokes institution sessions while retaining records.
@@ -15,7 +15,7 @@ Updated: 2026-11-22
 
 ## Migration and first setup
 
-Apply `migrations/977_xhenvolt_platform_control.sql` after the current tenant and finance migrations. Set `XHAIRA_PLATFORM_BOOTSTRAP_SECRET` on the server, visit `/platform/login`, create the first super admin, then remove or rotate the bootstrap secret. The migration must be applied before starting the platform APIs.
+Apply `migrations/977_xhenvolt_platform_control.sql` after the current tenant and finance migrations. Set `XHAIRA_PLATFORM_BOOTSTRAP_SECRET` on the server, visit `/app/platform/login`, create the first super admin, then remove or rotate the bootstrap secret. The migration must be applied before starting the platform APIs.
 
 The 977 preflight checks only required tenant/finance objects. Payment-intent fee analytics and loan metrics are optional; the migration grants access to those tables only when they exist. If a core prerequisite is missing, the preflight now reports its exact object name.
 
@@ -28,5 +28,5 @@ Other platform operations are stored in the distinct `platform_operations` table
 ## Validation
 
 - `npm.cmd test`: 32 passed, 0 failed.
-- `npm.cmd run build`: compiled successfully; Next.js completed static page generation and listed the `/platform` pages and APIs. Existing app routes emitted expected dynamic-cookie render notices because they depend on signed-in sessions.
+- The platform pages now live under `/app/platform`, with their own auth layout. Tenant pages retain their existing protected layout through the `(tenant)` route group, which does not change their public URLs.
 - No database-backed migration or API check was possible from the local test process; `DATABASE_URL` was not available to tests. Apply the migration and validate it in the target database before deployment.

@@ -16,7 +16,7 @@ export default function PlatformLoginPage() {
   useEffect(() => {
     fetch('/api/platform/auth', { cache: 'no-store' }).then(r => r.json()).then(result => {
       setState({ loading: false, setup: !!result.setup_required, available: !!result.setup_available, authenticated: !!result.authenticated });
-      if (result.authenticated) router.replace('/platform/dashboard');
+      if (result.authenticated) router.replace('/app/platform/dashboard');
     }).catch(() => setState({ loading: false, setup: false, available: false, authenticated: false }));
   }, [router]);
 
@@ -32,7 +32,7 @@ export default function PlatformLoginPage() {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'Sign in failed');
-      router.replace('/platform/dashboard');
+      router.replace('/app/platform/dashboard');
     } catch (err) { setError(err.message || 'Platform sign in failed'); }
     finally { setBusy(false); }
   }

@@ -6,13 +6,15 @@ import { Navbar } from '@/components/layout/Navbar';
 
 /**
  * Navigation Wrapper Component
- * Only renders Sidebar and Navbar on /app and /admin routes
+ * Only renders Sidebar and Navbar on institution /app and /admin routes.
+ * The isolated Xhenvolt platform console supplies its own navigation.
  */
 export function NavigationWrapper() {
   const pathname = usePathname();
   
-  // Show navigation only on /app and /admin routes
-  const showNavigation = pathname.startsWith('/app') || pathname.startsWith('/admin');
+  // Keep institutional navigation out of the separately authenticated console.
+  const isPlatformRoute = pathname.startsWith('/app/platform');
+  const showNavigation = (!isPlatformRoute && pathname.startsWith('/app')) || pathname.startsWith('/admin');
   
   if (!showNavigation) {
     return null;

@@ -28,9 +28,9 @@ export default function LayoutClient({ children }) {
     initializeErrorLogger();
   }, []);
 
-  // Show splash screen once per session on /app routes
+  // Show splash screen once per session on institutional /app routes
   useEffect(() => {
-    if (pathname.startsWith('/app') && !sessionStorage.getItem('xhaira_splash_shown')) {
+    if (pathname.startsWith('/app') && !pathname.startsWith('/app/platform') && !sessionStorage.getItem('xhaira_splash_shown')) {
       setShowSplash(true);
     }
   }, []);
@@ -40,8 +40,9 @@ export default function LayoutClient({ children }) {
     sessionStorage.setItem('xhaira_splash_shown', '1');
   }, []);
   
-  // Show navigation only on /app and /admin routes
-  const showNavigation = pathname.startsWith('/app') || pathname.startsWith('/admin');
+  // The platform console provides its own navigation and auth shell.
+  const isPlatformRoute = pathname.startsWith('/app/platform');
+  const showNavigation = (!isPlatformRoute && pathname.startsWith('/app')) || pathname.startsWith('/admin');
   
   // Monitor sidebar collapsed state
   useEffect(() => {

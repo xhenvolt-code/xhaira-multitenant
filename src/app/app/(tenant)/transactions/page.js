@@ -215,9 +215,9 @@ export default function TransactionsPage() {
                   {isExpanded && (
                     <div className="px-4 pb-4 bg-muted/20">
                       <div className="mb-3 grid grid-cols-1 gap-2 rounded-lg border border-border bg-card p-3 text-xs sm:grid-cols-2">
-                        <div><span className="text-muted-foreground">Reason: </span><span className="text-foreground">{tx.metadata?.reason || tx.description || '—'}</span></div>
-                        {tx.metadata?.paid_by && <div><span className="text-muted-foreground">Paid by: </span><span className="text-foreground">{tx.metadata.paid_by}</span></div>}
-                        {tx.metadata?.withdrawn_to && <div><span className="text-muted-foreground">Withdrawn to: </span><span className="text-foreground">{tx.metadata.withdrawn_to}</span></div>}
+                        <div><span className="text-muted-foreground">Reason: </span><span className="text-foreground">{tx.reason || tx.metadata?.reason || tx.description || '—'}</span></div>
+                        {(tx.depositor_name || tx.metadata?.depositor_name || tx.metadata?.paid_by) && <div><span className="text-muted-foreground">Depositor: </span><span className="text-foreground">{tx.depositor_name || tx.metadata?.depositor_name || tx.metadata?.paid_by}</span></div>}
+                        {(tx.receiver_name || tx.metadata?.receiver_name || tx.metadata?.withdrawn_to) && <div><span className="text-muted-foreground">Receiver: </span><span className="text-foreground">{tx.receiver_name || tx.metadata?.receiver_name || tx.metadata?.withdrawn_to}</span></div>}
                         <div><span className="text-muted-foreground">Recorded by: </span><span className="text-foreground">{tx.created_by_name || tx.created_by_email || '—'}</span></div>
                       </div>
                       {entries.length > 0 && (

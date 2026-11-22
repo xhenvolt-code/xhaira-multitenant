@@ -125,16 +125,16 @@ function TransactionModal({ account, action, paymentMethod = 'cash', onClose, on
           <div>
             <label className="block text-sm font-medium mb-1">Reason</label>
             <input
-              type="text"
+              type="text" required maxLength={1000}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground"
               value={description} onChange={e => setDescription(e.target.value)}
               placeholder={isWithdraw ? 'Reason for withdrawal' : 'Deposit source'}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">{isWithdraw ? 'Recipient / withdrawn to (optional)' : 'Paid by (optional)'}</label>
+            <label className="block text-sm font-medium mb-1">{isWithdraw ? 'Receiver name' : 'Depositor name'}</label>
             <input
-              type="text"
+              type="text" required
               maxLength={255}
               className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background text-foreground"
               value={counterparty} onChange={e => setCounterparty(e.target.value)}
@@ -414,7 +414,7 @@ export default function SavingsPage() {
       {modeModal && (
         <TransactionModeDialog
           action={modeModal.action}
-          account={{ memberAccountId: modeModal.account.member_account_id, label: `${modeModal.account.full_name} · ${modeModal.account.account_type_name}`, balance: modeModal.account.balance, allowsWithdrawal: modeModal.account.allows_withdrawal }}
+          account={{ memberAccountId: modeModal.account.member_account_id, memberName: modeModal.account.full_name, label: `${modeModal.account.full_name} · ${modeModal.account.account_type_name}`, balance: modeModal.account.balance, allowsWithdrawal: modeModal.account.allows_withdrawal }}
           onClose={() => setModeModal(null)}
           onManual={(paymentMethod) => { setModeModal(null); setModal({ ...modeModal, paymentMethod }); }}
           onSuccess={handleMobileSuccess}
