@@ -17,11 +17,14 @@ function normalizeUgandaPhone(value) {
   return /^256[37]\d{8}$/.test(digits) ? `+${digits}` : null;
 }
 
-export async function createMobileMoneyCollection({ amountUgx, phone, memberAccountId, idempotencyKey, userId, callbackUrl, reason, depositorName, receiverName }) {
+export async function createMobileMoneyCollection({ amountUgx, phone, memberAccountId, organizationAccountId, idempotencyKey, userId, callbackUrl, reason, depositorName, receiverName, organizationTransaction }) {
   if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
   if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(memberAccountId || ''))) {
-    return { ok: false, status: 400, error: 'Select a valid member account' };
+  const isOrganizationAccount = Boolean(organizationAccountId);
+  const destinationAccountId = isOrganizationAccount ? organizationAccountId : memberAccountId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(destinationAccountId || '')) ||
+      (isOrganizationAccount && memberAccountId)) {
+    return { ok: false, status: 400, error: 'Select one valid destination account' };
   }
   const normalizedPhone = normalizeUgandaPhone(phone);
   if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
@@ -32,13 +35,31 @@ export async function createMobileMoneyCollection({ amountUgx, phone, memberAcco
     return { ok: false, status: 400, error: 'Deposit reason and receiver name are required; depositor name is optional' };
   }
 
+  if (isOrganizationAccount) {
+    const organizationAccountSchema = await getPool().query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'payment_intents'
+            AND column_name = 'organization_account_id'
+       ) AS ready`
+    );
+    if (!organizationAccountSchema.rows[0]?.ready) {
+      return { ok: false, status: 503, error: 'Organization MarzPay schema is not ready; apply migration 983_organization_marzpay_transactions.sql' };
+    }
+  }
+
   const existing = await getPool().query(
-    "SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1",
+    `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id,
+            ${isOrganizationAccount ? 'organization_account_id,' : ''} metadata
+       FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
     [idempotencyKey]
   );
   if (existing.rows[0]) {
     const intent = existing.rows[0];
-    if (intent.direction !== 'collection' || Number(intent.amount_minor) !== amountUgx || intent.member_account_id !== memberAccountId) {
+    if (intent.direction !== 'collection' || Number(intent.amount_minor) !== amountUgx ||
+        intent.member_account_id !== (isOrganizationAccount ? null : memberAccountId) ||
+        (isOrganizationAccount && intent.organization_account_id !== organizationAccountId) ||
+        (isOrganizationAccount && intent.metadata?.request_fingerprint !== organizationTransaction?.request_fingerprint)) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx: Number(intent.amount_minor) };
@@ -73,36 +94,71 @@ export async function createMobileMoneyCollection({ amountUgx, phone, memberAcco
     return { ok: false, status: 503, error: 'Payment schema is not ready. No MarzPay request was sent; apply migrations 959, 961, 962, and 963, then retry.' };
   }
   const settlementAccountId = settlementAccount.id;
-  const accountCheck = await getPool().query(
-    `SELECT a.id, m.full_name
-       FROM accounts a
-     JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
-     JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
-     WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
-       AND ma.organization_id = public.current_organization_id()
-       AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
-       AND ma.currency = 'UGX' AND ma.status = 'active'`,
-    [settlementAccountId, memberAccountId]
-  );
-  if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX member account; verify the organization settlement account in settings' };
+  const accountCheck = isOrganizationAccount
+    ? await getPool().query(
+      `SELECT a.id, a.name AS full_name
+         FROM accounts a
+        WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
+          AND a.currency = 'UGX' AND a.type = 'mobile_money'
+          AND a.is_active = true AND a.status = 'active'`,
+      [organizationAccountId]
+    )
+    : await getPool().query(
+      `SELECT a.id, m.full_name
+         FROM accounts a
+         JOIN member_accounts ma ON ma.id = $2 AND ma.organization_id = a.organization_id
+         JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+        WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
+          AND ma.organization_id = public.current_organization_id()
+          AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
+          AND ma.currency = 'UGX' AND ma.status = 'active'`,
+      [settlementAccountId, memberAccountId]
+    );
+  if (!accountCheck.rows[0] || (isOrganizationAccount && organizationAccountId !== settlementAccountId)) {
+    return { ok: false, status: 400, error: 'Select the configured active UGX MarzPay organization account' };
+  }
   if (accountCheck.rows[0].full_name !== receiverName) {
-    return { ok: false, status: 400, error: 'Receiver name must match the selected member account holder' };
+    return { ok: false, status: 400, error: 'Receiver name must match the selected account holder' };
   }
 
-  const inserted = await getPool().query(
-    `INSERT INTO payment_intents
-       (idempotency_key, amount_minor, settlement_account_id, member_account_id, phone_masked, metadata, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-     ON CONFLICT (organization_id, idempotency_key) DO NOTHING
-     RETURNING id, provider_reference, status`,
-    [idempotencyKey, amountUgx, settlementAccountId, memberAccountId,
-      `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`,
-      JSON.stringify({ reason: reason.trim(), depositor_name: String(depositorName || '').trim().slice(0, 255) || null, receiver_name: receiverName.trim() }), userId]
-  );
+  const intentMetadata = JSON.stringify({
+    reason: reason.trim(),
+    depositor_name: String(depositorName || '').trim().slice(0, 255) || null,
+    receiver_name: receiverName.trim(),
+    ...(isOrganizationAccount ? { ...organizationTransaction, transaction_scope: 'organization', account_id: organizationAccountId, transaction_type: 'deposit', payment_method: 'mobile_money' } : {}),
+  });
+  const inserted = isOrganizationAccount
+    ? await getPool().query(
+      `INSERT INTO payment_intents
+         (idempotency_key, amount_minor, settlement_account_id, member_account_id,
+          organization_account_id, phone_masked, metadata, created_by)
+       VALUES ($1, $2, $3, NULL, $4, $5, $6::jsonb, $7)
+       ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+       RETURNING id, provider_reference, status`,
+      [idempotencyKey, amountUgx, settlementAccountId, organizationAccountId,
+        `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, intentMetadata, userId]
+    )
+    : await getPool().query(
+      `INSERT INTO payment_intents
+         (idempotency_key, amount_minor, settlement_account_id, member_account_id, phone_masked, metadata, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+       ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+       RETURNING id, provider_reference, status`,
+      [idempotencyKey, amountUgx, settlementAccountId, memberAccountId,
+        `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`, intentMetadata, userId]
+    );
   if (!inserted.rows[0]) {
-    const duplicate = await getPool().query('SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id FROM payment_intents WHERE idempotency_key = $1 LIMIT 1', [idempotencyKey]);
+    const duplicate = await getPool().query(
+      `SELECT id, direction, status, amount_minor, settlement_account_id, member_account_id,
+              ${isOrganizationAccount ? 'organization_account_id,' : ''} metadata
+         FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
+      [idempotencyKey]
+    );
     if (!duplicate.rows[0]) return { ok: false, status: 409, error: 'Could not reserve this idempotency key' };
-    if (duplicate.rows[0].direction !== 'collection' || Number(duplicate.rows[0].amount_minor) !== amountUgx || duplicate.rows[0].member_account_id !== memberAccountId) {
+    if (duplicate.rows[0].direction !== 'collection' || Number(duplicate.rows[0].amount_minor) !== amountUgx ||
+        duplicate.rows[0].member_account_id !== (isOrganizationAccount ? null : memberAccountId) ||
+        (isOrganizationAccount && duplicate.rows[0].organization_account_id !== organizationAccountId) ||
+        (isOrganizationAccount && duplicate.rows[0].metadata?.request_fingerprint !== organizationTransaction?.request_fingerprint)) {
       return { ok: false, status: 409, error: 'Idempotency key was already used with different payment details' };
     }
     return { ok: true, duplicate: true, id: duplicate.rows[0].id, status: duplicate.rows[0].status, amountUgx: Number(duplicate.rows[0].amount_minor) };
@@ -221,24 +277,36 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
       return { status: current.status, settled: false, error: null };
     }
 
+    const isOrganizationAccount = Boolean(current.organization_account_id);
+    const description = current.metadata?.reason || (isOrganizationAccount
+      ? 'Organization mobile money deposit'
+      : 'Mobile money deposit');
+    const transactionMetadata = {
+      ...(isOrganizationAccount ? current.metadata : {}),
+      provider: 'marzpay',
+      provider_uuid: current.provider_uuid,
+      payment_intent_id: current.id,
+      reason: description,
+      depositor_name: current.metadata?.depositor_name || null,
+      receiver_name: current.metadata?.receiver_name || null,
+      requested_amount_minor: Number(current.amount_minor),
+      provider_amount_minor: verdict.providerAmountMinor,
+      provider_fee_minor: verdict.providerFeeMinor,
+      fee_bearer: verdict.providerFeeMinor > 0 ? 'payer' : null,
+      ledger_amount_minor: verdict.ledgerAmountMinor,
+      ...(isOrganizationAccount ? {
+        transaction_scope: 'organization',
+        transaction_type: 'deposit',
+        account_id: current.organization_account_id,
+        payment_method: 'mobile_money',
+      } : {}),
+    };
     const transaction = await client.query(
       `INSERT INTO transactions
          (description, transaction_type, reference, metadata, reason, depositor_name, receiver_name,
           principal_minor, transaction_charges_minor, created_by)
        VALUES ($1, 'deposit', $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      ['MarzPay mobile money collection', current.provider_reference, JSON.stringify({
-        provider: 'marzpay',
-        provider_uuid: current.provider_uuid,
-        payment_intent_id: current.id,
-        reason: current.metadata?.reason || 'Mobile money deposit',
-        depositor_name: current.metadata?.depositor_name || null,
-        receiver_name: current.metadata?.receiver_name || null,
-        requested_amount_minor: Number(current.amount_minor),
-        provider_amount_minor: verdict.providerAmountMinor,
-        provider_fee_minor: verdict.providerFeeMinor,
-        fee_bearer: verdict.providerFeeMinor > 0 ? 'payer' : null,
-        ledger_amount_minor: verdict.ledgerAmountMinor,
-      }), current.metadata?.reason || 'Mobile money deposit', current.metadata?.depositor_name || null,
+      [description, current.provider_reference, JSON.stringify(transactionMetadata), description, current.metadata?.depositor_name || null,
         current.metadata?.receiver_name || null, Number(current.amount_minor),
         Number.isSafeInteger(Number(current.fee_calculation?.transactionChargesMinor))
           ? Number(current.fee_calculation.transactionChargesMinor)
@@ -247,22 +315,46 @@ export async function syncMobileMoneyCollection(intentId, providerUuidHint = nul
     );
     const transactionId = transaction.rows[0].id;
     const amount = verdict.ledgerAmountMinor;
-
-    await client.query(
-      `INSERT INTO ledger_entries (transaction_id, account_id, entry_type, amount, currency, description)
-       VALUES ($1, $2, 'DEBIT', $3, 'UGX', $4)`,
-      [transactionId, current.settlement_account_id, amount, 'MarzPay collection settlement']
-    );
-    await client.query(
-      `INSERT INTO ledger_entries (transaction_id, member_account_id, entry_type, amount, currency, description)
-       VALUES ($1, $2, 'CREDIT', $3, 'UGX', $4)`,
-      [transactionId, current.member_account_id, amount, 'Member savings deposit from MarzPay']
-    );
-    await client.query(
-      `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
-       VALUES ($1, $2, 'UGX', 'payment', $3, $4, CURRENT_DATE, $5)`,
-      [current.settlement_account_id, amount, transactionId, 'MarzPay collection settlement', current.created_by]
-    );
+    if (current.organization_account_id) {
+      await client.query(
+        `INSERT INTO ledger
+           (organization_id, account_id, amount, currency, source_type, source_id,
+            description, category, entry_date, metadata, created_by)
+         VALUES ($1, $2, $3, 'UGX', 'deposit', $4, $5, $6, $7::date, $8::jsonb, $9)`,
+        [(await client.query('SELECT public.current_organization_id() AS id')).rows[0].id,
+          current.organization_account_id, amount, transactionId, description,
+          current.metadata?.classification || 'deposit', current.metadata?.transaction_date || new Date().toISOString().slice(0, 10),
+          JSON.stringify(transactionMetadata), current.created_by]
+      );
+      await client.query(
+        `INSERT INTO audit_logs (organization_id, user_id, action, entity_type, entity_id, details)
+         VALUES (public.current_organization_id(), $1, 'DEPOSIT', 'organization_transaction', $2, $3::jsonb)`,
+        [current.created_by, transactionId, JSON.stringify({
+          account_id: current.organization_account_id,
+          amount: Number(amount),
+          currency: 'UGX',
+          reason: description,
+          payment_method: 'mobile_money',
+          payment_intent_id: current.id,
+        })]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO ledger_entries (transaction_id, account_id, entry_type, amount, currency, description)
+         VALUES ($1, $2, 'DEBIT', $3, 'UGX', $4)`,
+        [transactionId, current.settlement_account_id, amount, 'MarzPay collection settlement']
+      );
+      await client.query(
+        `INSERT INTO ledger_entries (transaction_id, member_account_id, entry_type, amount, currency, description)
+         VALUES ($1, $2, 'CREDIT', $3, 'UGX', $4)`,
+        [transactionId, current.member_account_id, amount, 'Member savings deposit from MarzPay']
+      );
+      await client.query(
+        `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
+         VALUES ($1, $2, 'UGX', 'payment', $3, $4, CURRENT_DATE, $5)`,
+        [current.settlement_account_id, amount, transactionId, 'MarzPay collection settlement', current.created_by]
+      );
+    }
     await client.query(
       `UPDATE payment_intents
           SET status = 'settled', provider_status = $1, provider_amount_minor = $2,

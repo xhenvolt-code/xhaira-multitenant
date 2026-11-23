@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
+import QRCode from 'qrcode';
+import { createReceiptVerificationUrl } from '@/lib/receipts/receipt-stamp.js';
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -11,7 +13,7 @@ function formatAmount(amount, currency = 'UGX') {
   return `${currency} ${Number(amount || 0).toLocaleString('en-UG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function renderReceipt({ receiptNumber, organization, event, lines, creator, createdAt, reference, metadata = {}, reason, depositorName, receiverName, principalMinor, transactionChargesMinor, installments = [] }) {
+function renderReceipt({ receiptNumber, organization, event, lines, creator, createdAt, reference, metadata = {}, reason, depositorName, receiverName, principalMinor, transactionChargesMinor, installments = [], qrDataUrl }) {
   const type = String(event || 'financial transaction').replace(/_/g, ' ');
   const date = createdAt
     ? new Date(createdAt).toLocaleString('en-UG', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Kampala' })
@@ -66,6 +68,9 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   const logo = isUploadedImage || isRemoteImage
     ? `<img class="org-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(organization.organization_name || 'Organization')} logo">`
     : '';
+  const qrSeal = qrDataUrl
+    ? `<div class="qr-seal"><img src="${escapeHtml(qrDataUrl)}" alt="Receipt authenticity QR code"><div><strong>Digital authenticity seal</strong><br>Scan to verify this receipt with Xhaira.</div></div>`
+    : `<div class="qr-seal unavailable">Digital verification seal unavailable. Contact the organization to verify this receipt.</div>`;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Receipt ${escapeHtml(receiptNumber)}</title><style>
@@ -75,7 +80,7 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   .summary{display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;margin:24px 0}.summary div{font-size:14px}.summary span{display:block;color:#64748b;font-size:11px;text-transform:uppercase;margin-bottom:3px}
   table{width:100%;border-collapse:collapse;margin:22px 0}th{text-align:left;background:#f1f5f9;font-size:11px;text-transform:uppercase;color:#475569}th,td{padding:11px 9px;border-bottom:1px solid #e2e8f0;font-size:13px}.amount{text-align:right;white-space:nowrap}
   .total{margin-left:auto;width:280px;display:flex;justify-content:space-between;padding:14px 0;border-top:2px solid #172033;font-weight:bold;font-size:17px}
-  footer{margin-top:38px;padding-top:16px;border-top:1px solid #cbd5e1;text-align:center;color:#64748b;font-size:12px}.actions{position:fixed;top:16px;right:16px}
+  footer{margin-top:38px;padding-top:16px;border-top:1px solid #cbd5e1;text-align:center;color:#64748b;font-size:12px}.qr-seal{display:flex;align-items:center;justify-content:center;gap:12px;margin:18px auto 8px;color:#334155;text-align:left}.qr-seal img{width:112px;height:112px;image-rendering:pixelated}.qr-seal strong{color:#047857}.qr-seal.unavailable{font-size:11px;color:#a16207}.actions{position:fixed;top:16px;right:16px}
   button{background:#047857;color:#fff;border:0;padding:10px 16px;border-radius:7px;font-weight:bold;cursor:pointer}@media print{body{margin:0 auto;padding:10px}.actions{display:none}}
   @media(max-width:600px){body{margin:8px;padding:14px}header{display:block}.receipt{text-align:left;margin-top:16px}.summary{grid-template-columns:1fr}}
   </style></head><body><div class="actions"><button onclick="window.print()">Print / Save PDF</button></div>
@@ -90,7 +95,7 @@ function renderReceipt({ receiptNumber, organization, event, lines, creator, cre
   <tbody>${receiptRows || '<tr><td colspan="4">No ledger lines found</td></tr>'}</tbody></table>
   ${installmentRows ? `<h2>Loan installment status</h2><table><thead><tr><th>Installment</th><th>Status after this payment</th><th class="amount">Cumulative paid</th></tr></thead><tbody>${installmentRows}</tbody></table>` : ''}
   ${totalBlock}
-  <footer>System generated receipt. Keep this receipt for your records.<br>${escapeHtml(receiptNumber)}</footer></body></html>`;
+  <footer>${qrSeal}<div>System generated receipt. Keep this receipt for your records.</div>${escapeHtml(receiptNumber)}</footer></body></html>`;
 }
 
 export async function GET(request, { params }) {
@@ -102,6 +107,18 @@ export async function GET(request, { params }) {
     const normalizedReceipt = decodeURIComponent(receiptNumber).trim().toUpperCase();
     if (!/^RCP-[A-F0-9]{32}$/.test(normalizedReceipt)) {
       return NextResponse.json({ success: false, error: 'Invalid receipt number' }, { status: 400 });
+    }
+    const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL || process.env.API_URL;
+    const origin = configuredOrigin ? new URL(configuredOrigin).origin : new URL(request.url).origin;
+    let qrDataUrl = null;
+    try {
+      const verificationUrl = createReceiptVerificationUrl(normalizedReceipt, origin);
+      qrDataUrl = await QRCode.toDataURL(verificationUrl, {
+        errorCorrectionLevel: 'M', margin: 1, width: 224,
+        color: { dark: '#102a43', light: '#ffffff' },
+      });
+    } catch (error) {
+      console.error('[Receipt] QR seal could not be generated:', error.message);
     }
 
     const html = await runWithOrganizationContext(auth.organizationId, async () => {
@@ -158,6 +175,7 @@ export async function GET(request, { params }) {
           depositorName: transaction.depositor_name, receiverName: transaction.receiver_name,
           principalMinor: transaction.principal_minor,
           transactionChargesMinor: transaction.transaction_charges_minor,
+          qrDataUrl,
           installments: installmentResult.rows });
       }
 
@@ -179,7 +197,7 @@ export async function GET(request, { params }) {
       const first = ledgerResult.rows[0];
       return renderReceipt({ receiptNumber: first.receipt_number, organization: first,
         event: first.source_type, lines: ledgerResult.rows.map((line) => ({ ...line, entry_type: Number(line.amount) < 0 ? 'OUT' : 'IN' })),
-        creator: first.creator_name, createdAt: first.created_at, reference: first.source_id });
+        creator: first.creator_name, createdAt: first.created_at, reference: first.source_id, qrDataUrl });
     });
 
     if (!html) return NextResponse.json({ success: false, error: 'Receipt not found' }, { status: 404 });

@@ -8,12 +8,8 @@ ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS transaction_charges_minor BIGINT
     CHECK (transaction_charges_minor IS NULL OR transaction_charges_minor >= 0);
 
--- Backfill the descriptive fields from the existing metadata contract. Existing
--- financial entries and historical transaction amounts are not changed.
-UPDATE public.transactions
-   SET reason = COALESCE(reason, NULLIF(metadata->>'reason', '')),
-       depositor_name = COALESCE(depositor_name, NULLIF(metadata->>'depositor_name', ''), NULLIF(metadata->>'paid_by', '')),
-       receiver_name = COALESCE(receiver_name, NULLIF(metadata->>'receiver_name', ''), NULLIF(metadata->>'withdrawn_to', ''))
- WHERE reason IS NULL OR depositor_name IS NULL OR receiver_name IS NULL;
+-- Financial transactions are immutable in this database. Do not update historical
+-- rows to backfill these fields; readers retain metadata fallbacks for old records.
+-- New transaction inserts populate the columns directly.
 
 COMMIT;

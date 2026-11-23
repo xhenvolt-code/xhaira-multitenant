@@ -3,6 +3,19 @@ import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
+import { createMobileMoneyCollection } from '@/lib/payment-collection-service.js';
+import { createOrganizationMobileMoneyDisbursement } from '@/lib/payment-disbursement-service.js';
+
+function callbackUrl() {
+  const configured = process.env.NEXT_PUBLIC_APP_URL || process.env.API_URL;
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    return url.protocol === 'https:' ? `${url.origin}/api/webhooks/marzpay` : null;
+  } catch {
+    return null;
+  }
+}
 
 const MAX_AMOUNT = /^\d{1,13}(?:\.\d{1,2})?$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -50,7 +63,32 @@ export async function GET(request) {
           LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset]
       );
-      return NextResponse.json({ success: true, data: rows.rows, pagination: { total: count.rows[0].total, limit, offset } });
+      const orgPaymentSchema = await query(
+        `SELECT EXISTS (
+           SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'payment_intents'
+              AND column_name = 'organization_account_id'
+         ) AS ready`
+      );
+      const mobileMoneyPending = orgPaymentSchema.rows[0]?.ready
+        ? await query(
+          `SELECT id, direction, status, provider_status, amount_minor,
+                  ledger_status, reconciliation_status, reconciliation_error,
+                  failure_reason, ledger_failure_reason, transaction_id, created_at,
+                  metadata->>'reason' AS reason,
+                  metadata->>'payment_method' AS payment_method
+             FROM public.payment_intents
+            WHERE organization_id = $1
+              AND organization_account_id IS NOT NULL
+              AND metadata->>'transaction_scope' = 'organization'
+              AND status = ANY($2::text[])
+            ORDER BY created_at DESC LIMIT 20`,
+          [organizationId, ['created', 'processing', 'review']]
+        )
+        : { rows: [] };
+      return NextResponse.json({ success: true, data: rows.rows,
+        mobile_money_pending: mobileMoneyPending.rows,
+        pagination: { total: count.rows[0].total, limit, offset } });
     });
   } catch (error) {
     console.error('[Organization transactions] GET failed:', error);
@@ -97,6 +135,7 @@ export async function POST(request) {
   const requestFingerprint = createHash('sha256').update(JSON.stringify({
     action, accountId, amount: String(amount), reason: reason.trim(), counterpartyName,
     classification, paymentMethod: paymentMethod || 'cash', normalizedDate, reference, notes,
+    phone: cleanOptional(body.phone, 32),
   })).digest('hex');
   const allowedPaymentMethods = new Set(['cash', 'bank_transfer', 'mobile_money', 'cheque', 'other']);
   if (paymentMethod && !allowedPaymentMethods.has(paymentMethod)) {
@@ -105,6 +144,67 @@ export async function POST(request) {
 
   try {
     return await runWithOrganizationContext(organizationId, async () => {
+      if (paymentMethod === 'mobile_money') {
+        const phone = cleanOptional(body.phone, 32);
+        if (!phone) return NextResponse.json({ success: false, error: 'A mobile-money phone number is required for MarzPay' }, { status: 400 });
+        if (!Number.isSafeInteger(Number(amount))) {
+          return NextResponse.json({ success: false, error: 'MarzPay supports whole UGX amounts only' }, { status: 400 });
+        }
+        if (action === 'withdrawal' && !counterpartyName) {
+          return NextResponse.json({ success: false, error: 'Recipient name is required for a MarzPay withdrawal' }, { status: 400 });
+        }
+        const selectedAccount = await query(
+          `SELECT id, name FROM public.accounts
+            WHERE id = $1 AND organization_id = $2
+              AND currency = 'UGX' AND is_active IS TRUE AND status = 'active'`,
+          [accountId, organizationId]
+        );
+        if (!selectedAccount.rows[0]) {
+          return NextResponse.json({ success: false, error: 'Select an active UGX organization account' }, { status: 400 });
+        }
+        const organizationTransaction = {
+          transaction_scope: 'organization',
+          account_id: accountId,
+          classification,
+          transaction_date: normalizedDate,
+          external_reference: reference,
+          notes,
+          request_fingerprint: requestFingerprint,
+          ...(action === 'deposit' ? { paid_by: counterpartyName } : { withdrawn_to: counterpartyName }),
+        };
+        const started = action === 'deposit'
+          ? await createMobileMoneyCollection({
+            amountUgx: Number(amount), phone, organizationAccountId: accountId,
+            idempotencyKey, userId: permission.auth.userId, callbackUrl: callbackUrl(),
+            reason: reason.trim(), depositorName: counterpartyName,
+            receiverName: selectedAccount.rows[0].name, organizationTransaction,
+          })
+          : await createOrganizationMobileMoneyDisbursement({
+            amountUgx: Number(amount), phone, organizationAccountId: accountId,
+            idempotencyKey, userId: permission.auth.userId, callbackUrl: callbackUrl(),
+            reason: reason.trim(), receiverName: counterpartyName, organizationTransaction,
+          });
+        if (!started.ok) {
+          return NextResponse.json({ success: false, error: started.error, id: started.id, status: started.state }, { status: started.status });
+        }
+        return NextResponse.json({
+          success: true,
+          mobile_money: true,
+          duplicate: started.duplicate || false,
+          data: {
+            id: started.id,
+            status: started.status,
+            direction: action === 'deposit' ? 'collection' : 'disbursement',
+            amount_minor: Number(amount),
+            account_id: accountId,
+            account_name: selectedAccount.rows[0].name,
+            failure_reason: started.failureReason || null,
+            ledger_status: started.ledgerStatus || null,
+            reconciliation_status: started.reconciliationStatus || null,
+          },
+        }, { status: started.duplicate ? 200 : 202 });
+      }
+
       const client = await getPool().connect();
       try {
         await client.query('BEGIN');

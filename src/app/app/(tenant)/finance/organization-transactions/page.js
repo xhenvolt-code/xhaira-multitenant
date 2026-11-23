@@ -8,7 +8,7 @@ import { usePermissions } from '@/components/providers/PermissionProvider';
 import Link from 'next/link';
 
 const today = () => new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
-const blankForm = () => ({ action: 'deposit', account_id: '', amount: '', paid_by: '', withdrawn_to: '', reason: '', classification: '', payment_method: 'cash', external_reference: '', transaction_date: today(), notes: '' });
+const blankForm = () => ({ action: 'deposit', account_id: '', amount: '', paid_by: '', withdrawn_to: '', phone: '', reason: '', classification: '', payment_method: 'cash', external_reference: '', transaction_date: today(), notes: '' });
 
 export default function OrganizationTransactionsPage() {
   const { hasPermission } = usePermissions();
@@ -21,6 +21,7 @@ export default function OrganizationTransactionsPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [paymentIntent, setPaymentIntent] = useState(null);
   const requestKey = useRef(null);
 
   const load = useCallback(async () => {
@@ -35,6 +36,13 @@ export default function OrganizationTransactionsPage() {
       if (!transactionResponse.ok || !transactionJson.success) throw new Error(transactionJson.error || 'Unable to load transactions');
       setAccounts((accountJson.data || []).filter(account => account.is_active && account.status === 'active'));
       setRows(transactionJson.data || []);
+      const pendingIntents = transactionJson.mobile_money_pending || [];
+      setPaymentIntent(current => {
+        const matching = pendingIntents.find(intent => intent.id === current?.id);
+        if (matching) return matching;
+        if (current && !['settled', 'failed', 'expired'].includes(current.status)) return current;
+        return pendingIntents[0] || null;
+      });
       setError('');
     } catch (err) {
       setError(err.message || 'Unable to load organization transactions');
@@ -44,6 +52,26 @@ export default function OrganizationTransactionsPage() {
   }, [filterType]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!paymentIntent?.id || ['settled', 'failed', 'expired'].includes(paymentIntent.status)) return undefined;
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await fetchWithAuth(`/api/finance/organization-transactions/${paymentIntent.id}`);
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Could not check MarzPay status');
+        if (!active) return;
+        setPaymentIntent(result.data);
+        if (result.data.status === 'settled') await load();
+      } catch (err) {
+        if (active) setError(err.message || 'Could not check MarzPay status');
+      }
+    };
+    check();
+    const timer = setInterval(check, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [paymentIntent?.id, paymentIntent?.status, load]);
 
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }));
 
@@ -66,7 +94,14 @@ export default function OrganizationTransactionsPage() {
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'Unable to record transaction');
       requestKey.current = null;
-      setNotice(result.duplicate ? 'This transaction was already recorded.' : `${form.action === 'deposit' ? 'Deposit' : 'Withdrawal'} recorded.`);
+      if (result.mobile_money) {
+        setPaymentIntent(result.data);
+        setNotice(result.duplicate
+          ? 'This MarzPay request already exists; its confirmation status is shown below.'
+          : 'MarzPay request sent. The organization ledger updates only after provider confirmation.');
+      } else {
+        setNotice(result.duplicate ? 'This transaction was already recorded.' : `${form.action === 'deposit' ? 'Deposit' : 'Withdrawal'} recorded.`);
+      }
       setForm(blankForm());
       await load();
     } catch (err) {
@@ -78,6 +113,19 @@ export default function OrganizationTransactionsPage() {
 
   const byLabel = form.action === 'deposit' ? 'Paid by (optional)' : 'Recipient / withdrawn to (optional)';
   const byKey = form.action === 'deposit' ? 'paid_by' : 'withdrawn_to';
+
+  async function checkPaymentStatus() {
+    if (!paymentIntent?.id) return;
+    try {
+      const response = await fetchWithAuth(`/api/finance/organization-transactions/${paymentIntent.id}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not check MarzPay status');
+      setPaymentIntent(result.data);
+      if (result.data.status === 'settled') await load();
+    } catch (err) {
+      setError(err.message || 'Could not check MarzPay status');
+    }
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
@@ -117,9 +165,12 @@ export default function OrganizationTransactionsPage() {
           </label>
           <label className="text-sm text-muted-foreground">Payment method
             <select value={form.payment_method} onChange={e => update('payment_method', e.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground">
-              <option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="mobile_money">Mobile money</option><option value="cheque">Cheque</option><option value="other">Other</option>
+              <option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="mobile_money">MarzPay mobile money</option><option value="cheque">Cheque</option><option value="other">Other</option>
             </select>
           </label>
+          {form.payment_method === 'mobile_money' && <label className="text-sm text-muted-foreground">Mobile-money phone number *
+            <input required inputMode="tel" autoComplete="tel" value={form.phone} onChange={e => update('phone', e.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground" placeholder="07xx xxx xxx" />
+          </label>}
           <label className="text-sm text-muted-foreground">Transaction date *
             <input required type="date" value={form.transaction_date} onChange={e => update('transaction_date', e.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground" />
           </label>
@@ -137,6 +188,19 @@ export default function OrganizationTransactionsPage() {
         </button>
         {accounts.length === 0 && <p className="text-sm text-muted-foreground">Create or activate an organization account before recording transactions.</p>}
       </form>}
+
+      {paymentIntent && <section className="rounded-xl border border-border bg-card p-4" aria-live="polite">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-foreground">MarzPay {paymentIntent.direction === 'collection' ? 'deposit' : 'withdrawal'}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">UGX {formatCurrency(paymentIntent.amount_minor || 0, 'UGX')} · {paymentIntent.status || 'processing'}{paymentIntent.provider_status ? ` · Provider: ${paymentIntent.provider_status}` : ''}</p>
+            {paymentIntent.failure_reason && <p className="mt-1 text-sm text-amber-700">{paymentIntent.failure_reason}</p>}
+            {paymentIntent.reconciliation_error && <p className="mt-1 text-sm text-amber-700">{paymentIntent.reconciliation_error}</p>}
+            {paymentIntent.status !== 'settled' && <p className="mt-1 text-xs text-muted-foreground">The organization transaction is posted only after MarzPay confirms it.</p>}
+          </div>
+          <button type="button" onClick={checkPaymentStatus} className="rounded-lg border border-border px-3 py-2 text-sm text-foreground hover:bg-muted">Check status</button>
+        </div>
+      </section>}
 
       <section className="overflow-hidden rounded-xl border border-border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">

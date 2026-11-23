@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
+import { generateMemberAccountNumber } from '@/lib/member-account-number.js';
 
 // GET /api/members/[id]/accounts — List accounts for a member
 export async function GET(request, { params }) {
@@ -86,10 +87,10 @@ export async function POST(request, { params }) {
     const accountTypeByCode = { VOL_SAV: 'savings', FIXED_SAV: 'fixed_deposit', FIXED_DEP: 'fixed_deposit', SHARES: 'shares', LOAN_ACC: 'loan', INVEST: 'investment' };
     const resolvedAccountType = accountTypeByCode[typeCode] || String(typeCode).toLowerCase();
 
-    // Generate account number: ACC-TYPE-RANDOM
-    const typePrefix = String(typeCode).substring(0, 3).toUpperCase();
-    const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const account_number = `ACC-${typePrefix}-${randomSuffix}`;
+    const account_number = await generateMemberAccountNumber(
+      perm.auth.organizationId,
+      resolvedAccountType
+    );
 
     const result = await query(
       `INSERT INTO member_accounts (organization_id, member_id, account_type, account_number, currency, account_type_id, created_by)

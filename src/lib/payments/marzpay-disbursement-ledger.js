@@ -17,9 +17,20 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
 
   try {
     await client.query('BEGIN');
+    const organizationAccountSchema = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'payment_intents'
+            AND column_name = 'organization_account_id'
+       ) AS ready`
+    );
+    const organizationAccountColumn = organizationAccountSchema.rows[0]?.ready
+      ? 'organization_account_id'
+      : 'NULL::uuid AS organization_account_id';
     const locked = await client.query(
       `SELECT id, direction, status, ledger_status, transaction_id, amount_minor, metadata, fee_calculation,
-              settlement_account_id, member_account_id, provider_reference, provider_uuid, provider_fee_minor, provider_fee_confirmed,
+              settlement_account_id, member_account_id, ${organizationAccountColumn},
+              provider_reference, provider_uuid, provider_fee_minor, provider_fee_confirmed,
               created_by
          FROM payment_intents
         WHERE id = $1 AND direction = 'disbursement'
@@ -34,6 +45,13 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
     } else {
       const amount = Number(intent.amount_minor);
       if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('Requested withdrawal amount is invalid');
+      const organizationTransaction = Boolean(intent.organization_account_id);
+      if (organizationTransaction && intent.organization_account_id !== intent.settlement_account_id) {
+        throw new Error('Organization MarzPay withdrawal account no longer matches the configured settlement account');
+      }
+      const transactionDescription = organizationTransaction
+        ? (intent.metadata?.reason || 'Organization mobile money withdrawal')
+        : 'MarzPay mobile money withdrawal';
 
       const transaction = await client.query(
         `INSERT INTO transactions
@@ -42,7 +60,7 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
          VALUES ($1, 'withdrawal', $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
         [
-          'MarzPay mobile money withdrawal',
+          transactionDescription,
           intent.provider_reference,
           JSON.stringify({
             provider: 'marzpay',
@@ -53,6 +71,16 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
             reason: intent.metadata?.reason || 'Mobile money withdrawal',
             depositor_name: intent.metadata?.depositor_name || null,
             receiver_name: intent.metadata?.receiver_name || null,
+            ...(organizationTransaction ? {
+              transaction_scope: 'organization',
+              transaction_type: 'withdrawal',
+              account_id: intent.organization_account_id,
+              payment_method: 'mobile_money',
+              classification: intent.metadata?.classification || null,
+              transaction_date: intent.metadata?.transaction_date || null,
+              external_reference: intent.metadata?.external_reference || null,
+              notes: intent.metadata?.notes || null,
+            } : {}),
             requested_amount_minor: amount,
             provider_amount_minor: providerTransaction.amountMinor ?? null,
             provider_currency: providerTransaction.currency ?? null,
@@ -72,23 +100,62 @@ export async function postCompletedDisbursementLedger(intentId, providerTransact
         ]
       );
       const transactionId = transaction.rows[0].id;
-      await client.query(
-        `INSERT INTO ledger_entries
-           (transaction_id, member_account_id, entry_type, amount, currency, description)
-         VALUES ($1, $2, 'DEBIT', $3, 'UGX', $4)`,
-        [transactionId, intent.member_account_id, amount, 'Member mobile money withdrawal']
-      );
-      await client.query(
-        `INSERT INTO ledger_entries
-           (transaction_id, account_id, entry_type, amount, currency, description)
-         VALUES ($1, $2, 'CREDIT', $3, 'UGX', $4)`,
-        [transactionId, intent.settlement_account_id, amount, 'MarzPay disbursement settlement']
-      );
-      await client.query(
-        `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
-         VALUES ($1, $2, 'UGX', 'adjustment', $3, $4, CURRENT_DATE, $5)`,
-        [intent.settlement_account_id, -amount, transactionId, 'MarzPay disbursement settlement', intent.created_by]
-      );
+      if (organizationTransaction) {
+        const description = intent.metadata?.reason || 'Organization mobile money withdrawal';
+        const metadata = {
+          ...intent.metadata,
+          provider: 'marzpay',
+          provider_uuid: intent.provider_uuid,
+          payment_intent_id: intent.id,
+          transaction_scope: 'organization',
+          transaction_type: 'withdrawal',
+          account_id: intent.organization_account_id,
+          payment_method: 'mobile_money',
+          requested_amount_minor: amount,
+          provider_amount_minor: providerTransaction.amountMinor ?? null,
+          provider_currency: providerTransaction.currency ?? null,
+          provider_fee_minor: providerTransaction.feeMinor ?? null,
+        };
+        await client.query(
+          `INSERT INTO ledger
+             (organization_id, account_id, amount, currency, source_type, source_id,
+              description, category, entry_date, metadata, created_by)
+           VALUES (public.current_organization_id(), $1, $2, 'UGX', 'withdrawal', $3, $4, $5, $6::date, $7::jsonb, $8)`,
+          [intent.organization_account_id, -amount, transactionId, description,
+            intent.metadata?.classification || 'withdrawal', intent.metadata?.transaction_date || new Date().toISOString().slice(0, 10),
+            JSON.stringify(metadata), intent.created_by]
+        );
+        await client.query(
+          `INSERT INTO audit_logs (organization_id, user_id, action, entity_type, entity_id, details)
+           VALUES (public.current_organization_id(), $1, 'WITHDRAWAL', 'organization_transaction', $2, $3::jsonb)`,
+          [intent.created_by, transactionId, JSON.stringify({
+            account_id: intent.organization_account_id,
+            amount,
+            currency: 'UGX',
+            reason: description,
+            payment_method: 'mobile_money',
+            payment_intent_id: intent.id,
+          })]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO ledger_entries
+             (transaction_id, member_account_id, entry_type, amount, currency, description)
+           VALUES ($1, $2, 'DEBIT', $3, 'UGX', $4)`,
+          [transactionId, intent.member_account_id, amount, 'Member mobile money withdrawal']
+        );
+        await client.query(
+          `INSERT INTO ledger_entries
+             (transaction_id, account_id, entry_type, amount, currency, description)
+           VALUES ($1, $2, 'CREDIT', $3, 'UGX', $4)`,
+          [transactionId, intent.settlement_account_id, amount, 'MarzPay disbursement settlement']
+        );
+        await client.query(
+          `INSERT INTO ledger (account_id, amount, currency, source_type, source_id, description, entry_date, created_by)
+           VALUES ($1, $2, 'UGX', 'adjustment', $3, $4, CURRENT_DATE, $5)`,
+          [intent.settlement_account_id, -amount, transactionId, 'MarzPay disbursement settlement', intent.created_by]
+        );
+      }
       await client.query(
         `UPDATE payment_intents
             SET status = 'settled', ledger_status = 'posted', ledger_amount_minor = $1,

@@ -230,6 +230,204 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
   }
 }
 
+export async function createOrganizationMobileMoneyDisbursement({
+  amountUgx, phone, organizationAccountId, idempotencyKey, userId, callbackUrl,
+  reason, receiverName, organizationTransaction,
+}) {
+  if (!isMarzpayConfigured()) return { ok: false, status: 503, error: 'MarzPay is not configured' };
+  if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) return { ok: false, status: 400, error: 'Amount must be a positive whole number of UGX' };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(organizationAccountId || ''))) {
+    return { ok: false, status: 400, error: 'Select a valid organization account' };
+  }
+  const normalizedPhone = normalizeUgandaPhone(phone);
+  if (!normalizedPhone) return { ok: false, status: 400, error: 'Enter a valid Uganda mobile money number' };
+  if (!/^[\w:.-]{8,128}$/.test(String(idempotencyKey || ''))) return { ok: false, status: 400, error: 'A valid Idempotency-Key header is required' };
+  if (!String(reason || '').trim() || String(reason).trim().length > 1000 ||
+      !String(receiverName || '').trim() || String(receiverName).trim().length > 255) {
+    return { ok: false, status: 400, error: 'Withdrawal reason and recipient name are required' };
+  }
+
+  const pool = getPool();
+  const settlementAccount = await getMarzpaySettlementAccount();
+  if (!settlementAccount) {
+    return { ok: false, status: 409, error: 'Configure an active UGX MarzPay settlement account in organization settings before sending money' };
+  }
+  if (settlementAccount.id !== organizationAccountId) {
+    return { ok: false, status: 400, error: 'MarzPay organization withdrawals must use the configured settlement account' };
+  }
+  const account = await pool.query(
+    `SELECT id, name FROM accounts
+      WHERE id = $1 AND organization_id = public.current_organization_id()
+        AND type = 'mobile_money' AND currency = 'UGX'
+        AND is_active IS TRUE AND status = 'active'`,
+    [organizationAccountId]
+  );
+  if (!account.rows[0]) return { ok: false, status: 400, error: 'Selected MarzPay account is not active in this organization' };
+  const schema = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'payment_intents'
+          AND column_name = 'organization_account_id'
+     ) AS supports_organization_accounts`
+  );
+  if (!schema.rows[0]?.supports_organization_accounts) {
+    return { ok: false, status: 503, error: 'Organization MarzPay schema is not ready; apply migration 983_organization_marzpay_transactions.sql' };
+  }
+  const disbursementSchema = await pool.query(
+    `SELECT COUNT(*)::int AS column_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'payment_intents'
+        AND column_name = ANY($1::text[])`,
+    [['ledger_status', 'reconciliation_status', 'reconciliation_error', 'reconciliation_checked_at',
+      'reconciliation_adjustment_transaction_id', 'ledger_failure_reason', 'provider_fee_confirmed']]
+  );
+  const directionConstraint = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM pg_constraint
+        WHERE conrelid = to_regclass('public.payment_intents')
+          AND conname = 'payment_intents_direction_check'
+          AND pg_get_constraintdef(oid) LIKE '%disbursement%'
+     ) AS supports_disbursements`
+  );
+  if (disbursementSchema.rows[0]?.column_count !== 7 || !directionConstraint.rows[0]?.supports_disbursements) {
+    return { ok: false, status: 503, error: 'MarzPay disbursement schema is not ready; apply migrations 959, 961, 962, 963, 964, and 983 before retrying' };
+  }
+
+  const existing = await pool.query(
+    `SELECT id, direction, status, amount_minor, organization_account_id, metadata
+       FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
+    [idempotencyKey]
+  );
+  if (existing.rows[0]) {
+    const intent = existing.rows[0];
+    if (intent.direction !== 'disbursement' || Number(intent.amount_minor) !== amountUgx ||
+        intent.organization_account_id !== organizationAccountId ||
+        intent.metadata?.request_fingerprint !== organizationTransaction?.request_fingerprint) {
+      return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
+    }
+    return { ok: true, duplicate: true, id: intent.id, status: intent.status, amountUgx };
+  }
+
+  const client = await pool.connect();
+  let intent;
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`organization-marzpay:${idempotencyKey}`]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [organizationAccountId]);
+    const lockedAccount = await client.query(
+      `SELECT id FROM accounts
+        WHERE id = $1 AND organization_id = public.current_organization_id()
+          AND type = 'mobile_money' AND currency = 'UGX'
+          AND is_active IS TRUE AND status = 'active'
+        FOR UPDATE`,
+      [organizationAccountId]
+    );
+    if (!lockedAccount.rows[0]) throw new Error('Selected MarzPay account is not active in this organization');
+
+    const duplicate = await client.query(
+      `SELECT id, direction, status, amount_minor, organization_account_id, metadata
+         FROM payment_intents WHERE idempotency_key = $1 LIMIT 1`,
+      [idempotencyKey]
+    );
+    if (duplicate.rows[0]) {
+      const row = duplicate.rows[0];
+      await client.query('COMMIT');
+      if (row.direction !== 'disbursement' || Number(row.amount_minor) !== amountUgx ||
+          row.organization_account_id !== organizationAccountId ||
+          row.metadata?.request_fingerprint !== organizationTransaction?.request_fingerprint) {
+        return { ok: false, status: 409, error: 'Idempotency key was already used with different transaction details' };
+      }
+      return { ok: true, duplicate: true, id: row.id, status: row.status, amountUgx };
+    }
+
+    const balance = await client.query(
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS amount
+         FROM ledger WHERE organization_id = public.current_organization_id()
+          AND account_id = $1`,
+      [organizationAccountId]
+    );
+    const reserved = await client.query(
+      `SELECT COALESCE(SUM(amount_minor), 0)::numeric AS amount
+         FROM payment_intents
+        WHERE organization_id = public.current_organization_id()
+          AND organization_account_id = $1 AND direction = 'disbursement'
+          AND status = ANY($2::text[])`,
+      [organizationAccountId, OPEN_STATUSES]
+    );
+    if (amountUgx > Number(balance.rows[0]?.amount || 0) - Number(reserved.rows[0]?.amount || 0)) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, error: 'Insufficient organization account balance for this withdrawal' };
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO payment_intents
+         (idempotency_key, direction, amount_minor, settlement_account_id, organization_account_id,
+          phone_masked, metadata, created_by)
+       VALUES ($1, 'disbursement', $2, $3, $4, $5, $6::jsonb, $7)
+       ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+       RETURNING id, provider_reference, status`,
+      [idempotencyKey, amountUgx, settlementAccount.id, organizationAccountId,
+        `${normalizedPhone.slice(0, 6)}***${normalizedPhone.slice(-3)}`,
+        JSON.stringify({
+          ...organizationTransaction,
+          reason: reason.trim(),
+          receiver_name: receiverName.trim(),
+          transaction_scope: 'organization',
+          transaction_type: 'withdrawal',
+          account_id: organizationAccountId,
+          payment_method: 'mobile_money',
+          request_fingerprint: organizationTransaction?.request_fingerprint,
+        }), userId]
+    );
+    if (!inserted.rows[0]) throw new Error('Could not reserve this organization withdrawal; retry with a new idempotency key');
+    intent = inserted.rows[0];
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    await client.release();
+  }
+
+  const started = await sendMarzpayMoney({
+    amountUgx,
+    phone: normalizedPhone,
+    reference: intent.provider_reference,
+    description: reason.trim().slice(0, 255),
+    callbackUrl,
+    metadata: [{ payment_intent_id: intent.id }, { organization_id: (await pool.query('SELECT public.current_organization_id() AS id')).rows[0].id }],
+  });
+  if (!started.ok) {
+    const state = started.outcomeUnknown ? 'review' : 'failed';
+    await pool.query(
+      'UPDATE payment_intents SET status = $1, failure_reason = $2, updated_at = NOW() WHERE id = $3 AND status = $4',
+      [state, safeError(started.error), intent.id, 'created']
+    );
+    return { ok: true, id: intent.id, status: state, failureReason: safeError(started.error), amountUgx };
+  }
+  const providerUuid = started.transaction?.uuid;
+  if (!providerUuid) {
+    await pool.query(
+      "UPDATE payment_intents SET status = 'review', failure_reason = $1, updated_at = NOW() WHERE id = $2 AND status = 'created'",
+      ['MarzPay did not return a disbursement identifier; manual reconciliation required', intent.id]
+    );
+    return { ok: true, id: intent.id, status: 'review', amountUgx };
+  }
+  await pool.query(
+    "UPDATE payment_intents SET provider_uuid = $1, provider_status = $2, status = 'processing', updated_at = NOW() WHERE id = $3 AND status = 'created'",
+    [providerUuid, safeError(started.transaction.status), intent.id]
+  );
+  try {
+    const synced = await syncMobileMoneyDisbursement(intent.id);
+    return { ok: true, id: intent.id, status: synced.status, ledgerStatus: synced.ledgerStatus,
+      reconciliationStatus: synced.reconciliationStatus, failureReason: synced.error, amountUgx };
+  } catch (error) {
+    console.error('[Organization MarzPay withdrawal] Ledger posting is retryable:', error.message);
+    return { ok: true, id: intent.id, status: 'processing', ledgerStatus: 'failed',
+      failureReason: 'MarzPay accepted the payout. Ledger posting failed; recheck before starting another withdrawal.', amountUgx };
+  }
+}
+
 export async function syncMobileMoneyDisbursement(intentId, providerUuidHint = null) {
   const pool = getPool();
   if (providerUuidHint && /^[0-9a-fA-F-]{20,64}$/.test(providerUuidHint)) {

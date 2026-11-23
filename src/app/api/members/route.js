@@ -3,6 +3,7 @@ import { getPool, query } from '@/lib/db.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { getMemberFields, getMissingRequiredMemberFields, validateMemberFields } from '@/lib/member-config.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
+import { generateMemberAccountNumber } from '@/lib/member-account-number.js';
 
 const PRIVATE_NO_STORE = { headers: { 'Cache-Control': 'private, no-store' } };
 
@@ -260,7 +261,7 @@ export async function POST(request) {
       ).catch(() => ({ rows: [] }));
 
       if (volSavType.rows.length > 0) {
-        const accNum = `SAV-${membership_number.split('-').slice(-1)[0]}`;
+        const accNum = await generateMemberAccountNumber(perm.auth.organizationId, 'savings');
         await query(
           `INSERT INTO member_accounts (organization_id, member_id, account_type, account_type_id, account_number, currency, status, opened_at)
            VALUES ($1, $2, 'savings', $3, $4, 'UGX', 'active', NOW())
