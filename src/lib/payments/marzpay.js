@@ -74,6 +74,41 @@ async function requestMarzpay(method, path, body, formData = false) {
   }
 }
 
+function normalizeUgandaPhoneForVerification(value) {
+  let digits = String(value || '').replace(/[\s()+-]/g, '');
+  if (/^0[37]\d{8}$/.test(digits)) digits = `256${digits.slice(1)}`;
+  else if (/^[37]\d{8}$/.test(digits)) digits = `256${digits}`;
+  return /^256[37]\d{8}$/.test(digits) ? digits : null;
+}
+
+export async function verifyMarzpayPhone(value) {
+  const normalizedPhone = normalizeUgandaPhoneForVerification(value);
+  let phoneNumber = String(value || '').replace(/\D/g, '');
+  if (/^0[37]/.test(phoneNumber)) phoneNumber = `256${phoneNumber.slice(1)}`;
+  else if (/^[37]/.test(phoneNumber)) phoneNumber = `256${phoneNumber}`;
+  if (!phoneNumber) return { ok: false, status: 400, error: 'Enter a Uganda mobile number' };
+
+  const response = await requestMarzpay('POST', '/phone-verification/verify', { phone_number: phoneNumber });
+  const root = response.json || {};
+  const data = root.data || {};
+  if (!response.ok || root.success !== true) {
+    const status = response.status === 404 ? 404
+      : response.status === 400 || response.status === 422 ? 400
+        : response.status === 401 || response.status === 403 ? 503
+          : response.status === 0 || response.status >= 500 ? 502 : 400;
+    return { ok: false, status, error: String(root.message || root.error || response.error || 'MarzPay could not verify this phone number').slice(0, 200) };
+  }
+
+  const fullName = String(data.full_name || [data.first_name, data.last_name].filter(Boolean).join(' ')).trim().slice(0, 255);
+  const verifiedPhone = normalizeUgandaPhoneForVerification(data.phone_number || root.phone_number || phoneNumber);
+  if (!normalizedPhone || !fullName || verifiedPhone !== normalizedPhone || String(data.verification_status || '').toLowerCase() !== 'verified') {
+    return { ok: false, status: 502, error: 'MarzPay returned an incomplete phone verification result' };
+  }
+
+  const result = { ok: true, phoneNumber: normalizedPhone, fullName, firstName: String(data.first_name || '').trim(), lastName: String(data.last_name || '').trim() };
+  return result;
+}
+
 function flattenMetadata(metadata) {
   return metadata.flatMap(item => Object.entries(item || {}).map(([key, value]) => ({ [key]: String(value) }))).slice(0, 10);
 }

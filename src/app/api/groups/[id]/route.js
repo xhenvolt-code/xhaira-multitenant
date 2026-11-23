@@ -12,11 +12,12 @@ export async function GET(request, { params }) {
       const groupResult = await query(
         `SELECT g.id, g.group_member_id, g.group_name, g.created_at,
                 m.status AS group_status, m.membership_number AS group_membership_number,
-                COUNT(link.member_id)::int AS member_count
+                COUNT(link.member_id) FILTER (WHERE linked_member.trashed_at IS NULL)::int AS member_count
            FROM member_groups g
-           LEFT JOIN members m ON m.id = g.group_member_id AND m.organization_id = g.organization_id
+           LEFT JOIN members m ON m.id = g.group_member_id AND m.organization_id = g.organization_id AND m.trashed_at IS NULL
            LEFT JOIN member_group_links link ON link.group_id = g.id AND link.organization_id = g.organization_id
-          WHERE g.id = $1 AND g.organization_id = $2
+           LEFT JOIN members linked_member ON linked_member.id = link.member_id AND linked_member.organization_id = link.organization_id
+          WHERE g.id = $1 AND g.organization_id = $2 AND (g.group_member_id IS NULL OR m.id IS NOT NULL)
           GROUP BY g.id, m.status, m.membership_number`,
         [id, perm.auth.organizationId]
       );
@@ -26,7 +27,7 @@ export async function GET(request, { params }) {
         query(`SELECT m.id, m.full_name, m.membership_number, m.status
                  FROM member_group_links link JOIN members m ON m.id = link.member_id
                    AND m.organization_id = link.organization_id
-                WHERE link.group_id = $1 AND link.organization_id = $2 ORDER BY m.full_name`,
+                WHERE link.group_id = $1 AND link.organization_id = $2 AND m.trashed_at IS NULL ORDER BY m.full_name`,
           [id, perm.auth.organizationId]),
         query(`SELECT config_key, config_value FROM sacco_configurations
                 WHERE organization_id = $1

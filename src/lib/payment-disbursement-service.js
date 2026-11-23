@@ -97,7 +97,7 @@ export async function createMobileMoneyDisbursement({ amountUgx, phone, memberAc
        WHERE a.id = $1 AND a.organization_id = public.current_organization_id()
          AND ma.organization_id = public.current_organization_id()
          AND a.currency = 'UGX' AND a.is_active = true AND a.status = 'active'
-         AND ma.currency = 'UGX' AND ma.status = 'active'`,
+         AND ma.currency = 'UGX' AND ma.status = 'active' AND m.trashed_at IS NULL`,
     [settlementAccountId, memberAccountId]
   );
   if (!accountCheck.rows[0]) return { ok: false, status: 400, error: 'Select an active UGX member account; verify the organization settlement account in settings' };
@@ -271,7 +271,7 @@ export async function createOrganizationMobileMoneyDisbursement({
      ) AS supports_organization_accounts`
   );
   if (!schema.rows[0]?.supports_organization_accounts) {
-    return { ok: false, status: 503, error: 'Organization MarzPay schema is not ready; apply migration 983_organization_marzpay_transactions.sql' };
+    return { ok: false, status: 503, error: 'Organization MarzPay schema is not ready; apply migration 981_organization_account_collections.sql' };
   }
   const disbursementSchema = await pool.query(
     `SELECT COUNT(*)::int AS column_count

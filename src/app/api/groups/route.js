@@ -10,11 +10,12 @@ export async function GET(request) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
       const [groups, policies] = await Promise.all([
         query(`SELECT g.id, COALESCE(m.full_name, g.group_name) AS full_name, g.group_member_id,
-                      COUNT(link.member_id)::int AS member_count
+                      COUNT(link.member_id) FILTER (WHERE linked_member.trashed_at IS NULL)::int AS member_count
                  FROM member_groups g
-                 LEFT JOIN members m ON m.id = g.group_member_id AND m.organization_id = g.organization_id
+                 LEFT JOIN members m ON m.id = g.group_member_id AND m.organization_id = g.organization_id AND m.trashed_at IS NULL
                  LEFT JOIN member_group_links link ON link.group_id = g.id AND link.organization_id = g.organization_id
-                WHERE g.organization_id = $1
+                 LEFT JOIN members linked_member ON linked_member.id = link.member_id AND linked_member.organization_id = link.organization_id
+                WHERE g.organization_id = $1 AND (g.group_member_id IS NULL OR m.id IS NOT NULL)
                 GROUP BY g.id, m.full_name, g.group_name, g.group_member_id
                 ORDER BY full_name`, [perm.auth.organizationId]),
         query(`SELECT config_key, config_value FROM sacco_configurations

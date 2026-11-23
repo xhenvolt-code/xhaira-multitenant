@@ -16,6 +16,7 @@ export function Navbar() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const searchInputRef = useRef(null);
@@ -183,20 +184,50 @@ export function Navbar() {
 
   const handleSearch = (query) => {
     setSearchQuery(query);
-    if (query.length > 0) {
-      const mockResults = [
-        { id: 1, title: 'Dashboard', category: 'Pages', path: '/app/dashboard' },
-        { id: 2, title: 'Prospects', category: 'Pipeline', path: '/app/prospects' },
-        { id: 3, title: 'Deals', category: 'Sales', path: '/app/deals' },
-        { id: 4, title: 'Finance', category: 'Money', path: '/app/finance' },
-        { id: 5, title: 'Settings', category: 'Admin', path: '/app/settings' },
-        { id: 6, title: 'Users', category: 'Admin', path: '/app/admin/users' },
-      ].filter((item) => item.title.toLowerCase().includes(query.toLowerCase()));
-      setSearchResults(mockResults);
-    } else {
-      setSearchResults([]);
-    }
   };
+
+  useEffect(() => {
+    const value = searchQuery.trim();
+    const allPageResults = [
+      { id: 'page-dashboard', title: 'Dashboard', category: 'Pages', path: '/app/dashboard' },
+      { id: 'page-prospects', title: 'Prospects', category: 'Pipeline', path: '/app/prospects' },
+      { id: 'page-deals', title: 'Deals', category: 'Sales', path: '/app/deals' },
+      { id: 'page-finance', title: 'Finance', category: 'Money', path: '/app/finance' },
+      { id: 'page-settings', title: 'Settings', category: 'Admin', path: '/app/settings' },
+      { id: 'page-users', title: 'Users', category: 'Admin', path: '/app/admin/users' },
+    ];
+    const pageResults = value ? allPageResults.filter((item) => item.title.toLowerCase().includes(value.toLowerCase())) : [];
+    if (value.length < 2) {
+      setSearchResults(pageResults);
+      setSearchLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const response = await fetch(`/api/members/search?search=${encodeURIComponent(value)}`, {
+          credentials: 'include', cache: 'no-store', signal: controller.signal,
+        });
+        const result = await response.json();
+        if (response.ok && result.success) {
+          setSearchResults([...pageResults, ...(result.data || []).map((member) => ({
+            id: `member-${member.id}`,
+            title: member.full_name,
+            category: member.matched_account_number ? `Member · ${member.matched_account_number}` : `Member · ${member.membership_number || 'Profile'}`,
+            path: `/app/members/${member.id}`,
+          }))]);
+        } else {
+          setSearchResults(pageResults);
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') setSearchResults(pageResults);
+      } finally {
+        if (!controller.signal.aborted) setSearchLoading(false);
+      }
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [searchQuery]);
 
   return (
     <motion.nav
@@ -221,7 +252,7 @@ export function Navbar() {
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search... (press /)"
+              placeholder="Search members or account suffix... (press /)"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
               onFocus={() => setSearchOpen(true)}
@@ -255,7 +286,13 @@ export function Navbar() {
             </div>
           )}
 
-          {searchOpen && searchQuery && searchResults.length === 0 && (
+          {searchOpen && searchQuery && searchLoading && searchResults.length === 0 && (
+            <div className="absolute top-full left-0 right-0 mt-2 rounded-xl shadow-2xl z-50 p-4 text-center" style={{ background: 'var(--theme-navbar)', border: '1px solid var(--navbar-border)' }}>
+              <p className="text-sm" style={{ color: 'var(--navbar-muted)' }}>Searching members…</p>
+            </div>
+          )}
+
+          {searchOpen && searchQuery.trim().length >= 2 && !searchLoading && searchResults.length === 0 && (
             <div className="absolute top-full left-0 right-0 mt-2 rounded-xl shadow-2xl z-50 p-4 text-center" style={{ background: 'var(--theme-navbar)', border: '1px solid var(--navbar-border)' }}>
               <p className="text-sm" style={{ color: 'var(--navbar-muted)' }}>No results for &ldquo;{searchQuery}&rdquo;</p>
             </div>

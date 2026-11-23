@@ -25,7 +25,7 @@ export async function GET(request) {
     const offset   = (page - 1) * limit;
 
     let where  = `WHERE vb.status = 'active' AND vb.currency = 'UGX'
-                  AND m.organization_id = $1 AND ma.organization_id = $1`;
+                  AND m.organization_id = $1 AND ma.organization_id = $1 AND m.trashed_at IS NULL`;
     const args = [perm.auth.organizationId];
 
     if (memberId) {
@@ -98,6 +98,12 @@ export async function POST(request) {
         { status: 400 }
       );
     }
+    const memberAccount = await query(
+      `SELECT 1 FROM member_accounts ma JOIN members m ON m.id = ma.member_id AND m.organization_id = ma.organization_id
+        WHERE ma.id = $1 AND ma.organization_id = $2 AND m.trashed_at IS NULL`,
+      [member_account_id, perm.auth.organizationId]
+    );
+    if (!memberAccount.rows[0]) return NextResponse.json({ success: false, error: 'Member account not found' }, { status: 404 });
     if (typeof reason !== 'string' || !reason.trim()) {
       return NextResponse.json({ success: false, error: 'A transaction reason is required' }, { status: 400 });
     }

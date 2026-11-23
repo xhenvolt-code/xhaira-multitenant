@@ -18,7 +18,8 @@ export async function GET(request) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
     const offset = (page - 1) * limit;
 
-    let whereClause = `WHERE t.organization_id = $1 AND t.transaction_type = 'transfer'`;
+    let whereClause = `WHERE t.organization_id = $1 AND t.transaction_type = 'transfer'
+      AND sender_m.trashed_at IS NULL AND receiver_m.trashed_at IS NULL`;
     const params = [perm.auth.organizationId];
 
     if (memberId) {
@@ -83,7 +84,7 @@ export async function POST(request) {
     const senderAcct = await query(
       `SELECT ma.member_id, m.full_name as name
        FROM member_accounts ma JOIN members m ON ma.member_id = m.id
-       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2`,
+       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2 AND m.trashed_at IS NULL`,
       [sender_account_id, perm.auth.organizationId]
     );
     if (senderAcct.rows.length === 0) {
@@ -93,7 +94,7 @@ export async function POST(request) {
     const receiverAcct = await query(
       `SELECT ma.member_id, m.full_name as name
        FROM member_accounts ma JOIN members m ON ma.member_id = m.id
-       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2`,
+       WHERE ma.id = $1 AND ma.organization_id = $2 AND m.organization_id = $2 AND m.trashed_at IS NULL`,
       [receiver_account_id, perm.auth.organizationId]
     );
     if (receiverAcct.rows.length === 0) {

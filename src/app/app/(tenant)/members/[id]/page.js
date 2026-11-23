@@ -11,6 +11,7 @@ import { fetchWithAuth } from '@/lib/fetch-client';
 import { useMembersData } from '../members-data-context';
 import { useToast } from '@/components/ui/Toast';
 import { useApiRefresh } from '@/lib/use-api-refresh';
+import { useMarzpayPhoneVerification } from '@/lib/use-marzpay-phone-verification';
 import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link from 'next/link';
 
@@ -72,6 +73,7 @@ export default function MemberDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editForm, setEditForm] = useState(EMPTY_EDIT);
+  const memberPhoneVerification = useMarzpayPhoneVerification(editing && member?.member_kind !== 'group');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showNewAccount, setShowNewAccount] = useState(false);
   const [newAccount, setNewAccount] = useState({ account_type_id: '', currency: 'UGX' });
@@ -391,6 +393,19 @@ export default function MemberDetailPage() {
     }
   };
 
+
+  const fetchDetails = async (accountId) => {
+    setSelectedAccount(prev => prev === accountId ? null : accountId);
+    if (selectedAccount === accountId) return;
+    try {
+      const res = await fetchWithAuth(`/api/members/${id}/accounts/${accountId}/ledger?limit=20`);
+      const json = await res.json();
+      if (json.success) setLedger(json.data || []);
+    } catch {
+      setLedger([]);
+    }
+  };
+
   useApiRefresh(() => {
     void fetchData({ refreshMember: true });
     if (activeTab === 'Audit Trail') void fetchAuditLog();
@@ -572,7 +587,14 @@ export default function MemberDetailPage() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelClass}>Phone</label>
-                      <input value={editForm.phone} onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))} className={inputClass} />
+                      <input type="tel" inputMode="tel" autoComplete="tel" value={editForm.phone} onInput={e => { const phone = e.currentTarget.value; memberPhoneVerification.onPhoneInput(phone); setEditForm(f => ({ ...f, phone })); }} className={inputClass} />
+                      <p className={`mt-1 text-xs ${memberPhoneVerification.status === 'error' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`} aria-live="polite">
+                        {memberPhoneVerification.status === 'checking' ? `Verifying ${memberPhoneVerification.phone} with MarzPay…` : memberPhoneVerification.status === 'verified' ? `MarzPay verified: ${memberPhoneVerification.fullName}` : memberPhoneVerification.status === 'error' ? `${memberPhoneVerification.error}.` : 'Enter a Uganda phone number to verify the registered name.'}
+                      </p>
+                      {memberPhoneVerification.status === 'verified' && <button type="button" onClick={() => {
+                        const parts = memberPhoneVerification.fullName.split(/\s+/).filter(Boolean);
+                        setEditForm(current => ({ ...current, first_name: parts[0] || '', other_name: '', last_name: parts.slice(1).join(' ') }));
+                      }} className="mt-1 text-xs font-medium text-blue-600 hover:underline">Use verified name</button>}
                     </div>
                     <div>
                       <label className={labelClass}>Email</label>

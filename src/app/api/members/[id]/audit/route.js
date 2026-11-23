@@ -19,7 +19,7 @@ export async function GET(request, { params }) {
        FROM member_audit_log al
        LEFT JOIN users u ON al.performed_by = u.id AND u.organization_id = al.organization_id
        WHERE al.member_id = $1 AND al.organization_id = $2
-         AND EXISTS (SELECT 1 FROM members m WHERE m.id = $1 AND m.organization_id = $2)
+         AND EXISTS (SELECT 1 FROM members m WHERE m.id = $1 AND m.organization_id = $2 AND m.trashed_at IS NULL)
        ORDER BY al.created_at DESC
        LIMIT $3`,
       [id, perm.auth.organizationId, limit]

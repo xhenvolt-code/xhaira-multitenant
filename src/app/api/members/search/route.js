@@ -43,21 +43,33 @@ export async function GET(request) {
               WHERE registered_group.group_member_id = m.id
                 AND registered_group.organization_id = m.organization_id
            ))`;
+      const accountSuffix = search.replace(/\D/g, '');
 
       const result = await query(
-        `SELECT m.id, m.full_name, m.membership_number, m.phone
+        `SELECT m.id, m.full_name, m.membership_number, m.phone,
+                (SELECT ma.account_number FROM member_accounts ma
+                  WHERE ma.organization_id = m.organization_id AND ma.member_id = m.id
+                    AND char_length($3) > 0
+                    AND (right(regexp_replace(ma.account_number, '[^0-9]', '', 'g'), char_length($3)) = $3
+                      OR (left($3, 2) = '99' AND right(regexp_replace(ma.account_number, '[^0-9]', '', 'g'), char_length($3) + 1) = '0' || $3))
+                  ORDER BY ma.created_at DESC LIMIT 1) AS matched_account_number
            FROM members m
           WHERE m.organization_id = $1
-            AND m.status = 'active'
+            AND m.trashed_at IS NULL
             ${groupFilter}
             AND (
               lower(m.full_name) LIKE $2 ESCAPE '\\'
               OR lower(m.membership_number) LIKE $2 ESCAPE '\\'
               OR lower(m.phone) LIKE $2 ESCAPE '\\'
+              OR EXISTS (SELECT 1 FROM member_accounts ma
+                  WHERE ma.organization_id = m.organization_id AND ma.member_id = m.id
+                    AND char_length($3) > 0
+                    AND (right(regexp_replace(ma.account_number, '[^0-9]', '', 'g'), char_length($3)) = $3
+                      OR (left($3, 2) = '99' AND right(regexp_replace(ma.account_number, '[^0-9]', '', 'g'), char_length($3) + 1) = '0' || $3)))
             )
           ORDER BY lower(m.full_name), m.id
           LIMIT ${MAX_RESULTS}`,
-        [permission.auth.organizationId, escapeLikePrefix(search.toLowerCase())]
+        [permission.auth.organizationId, escapeLikePrefix(search.toLowerCase()), accountSuffix]
       );
 
       return NextResponse.json({ success: true, data: result.rows }, { headers: { 'Cache-Control': 'private, no-store' } });
