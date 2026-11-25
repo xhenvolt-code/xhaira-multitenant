@@ -52,7 +52,9 @@ export default function LoginForm() {
         return;
       }
 
-      router.push('/app/dashboard');
+      // A new login can belong to a different tenant. Start a fresh document
+      // so no client-side tenant data survives the session change.
+      window.location.replace('/app/dashboard');
     } catch (err) {
       setError('An error occurred. Please try again.');
       console.error('Login error:', err);

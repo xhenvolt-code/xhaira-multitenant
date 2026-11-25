@@ -9,6 +9,7 @@ import Link from 'next/link';
 import MemberRegistrationForm from '@/components/members/MemberRegistrationForm';
 import { useMembersData } from './members-data-context';
 import { useApiRefresh } from '@/lib/use-api-refresh';
+import { usePermissions } from '@/components/providers/PermissionProvider';
 
 const STATUS_STYLES = {
   active: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -20,8 +21,13 @@ const STATUS_STYLES = {
 
 export default function MembersPage() {
   const { rememberMembers, forgetMember } = useMembersData();
+  const { user } = usePermissions();
+  const organizationId = user?.organizationId || '';
+  const userId = user?.id || '';
+  const identityKey = `${organizationId}:${userId}`;
   const [members, setMembers] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [loadedIdentityKey, setLoadedIdentityKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [activeView, setActiveView] = useState('members');
@@ -72,9 +78,11 @@ export default function MembersPage() {
       if (requestId !== membersRequestId.current) return;
       const loadedMembers = [...(firstPage.data || []), ...remainingPages.flat()];
       setMembers(loadedMembers);
+      setLoadedIdentityKey(identityKey);
       rememberMembers(loadedMembers);
     } catch (err) {
       if (requestId !== membersRequestId.current) return;
+      setLoadedIdentityKey(identityKey);
       console.error('Failed to fetch members:', err);
       setLoadError(err.message || 'Could not load members. Please check your connection and try again.');
     } finally {
@@ -94,8 +102,10 @@ export default function MembersPage() {
       }
       if (requestId !== membersRequestId.current) return;
       setGroups(result.data || []);
+      setLoadedIdentityKey(identityKey);
     } catch (err) {
       if (requestId !== membersRequestId.current) return;
+      setLoadedIdentityKey(identityKey);
       console.error('Failed to fetch groups:', err);
       setLoadError(err.message || 'Could not load groups. Please check your connection and try again.');
     } finally {
@@ -106,10 +116,18 @@ export default function MembersPage() {
   useApiRefresh(() => (activeView === 'members' ? fetchMembers() : fetchGroups()));
 
   useEffect(() => {
+    // Never keep displaying a previous user's tenant data while the current
+    // session's list request is in flight.
+    if (loadedIdentityKey && loadedIdentityKey !== identityKey) {
+      membersRequestId.current += 1;
+      setMembers([]);
+      setGroups([]);
+      setLoadedIdentityKey('');
+    }
     if (activeView === 'members') fetchMembers();
     else fetchGroups();
     return () => { membersRequestId.current += 1; };
-  }, [activeView, search, statusFilter]);
+  }, [activeView, search, statusFilter, identityKey]);
 
   const activeCount = members.filter(m => m.status === 'active').length;
   const totalBalance = members.reduce((sum, m) => sum + parseFloat(m.total_balance || 0), 0);
@@ -232,7 +250,7 @@ export default function MembersPage() {
       </div>
 
       {/* Members Table */}
-      {loading ? (
+      {loading || loadedIdentityKey !== identityKey ? (
         <div className="text-center py-12 text-muted-foreground">Loading {activeView}...</div>
       ) : loadError ? (
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-8 text-center text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">

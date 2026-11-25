@@ -9,11 +9,9 @@
  */
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, ShieldCheck, Loader2 } from 'lucide-react';
 
 export default function SetupPasswordPage() {
-  const router = useRouter();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNew, setShowNew] = useState(false);
@@ -54,7 +52,7 @@ export default function SetupPasswordPage() {
       }
 
       setSuccess(true);
-      setTimeout(() => router.replace('/app/dashboard'), 1500);
+      setTimeout(() => window.location.replace('/app/dashboard'), 1500);
     } catch {
       setError('An error occurred. Please try again.');
     } finally {

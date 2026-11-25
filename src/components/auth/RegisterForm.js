@@ -6,11 +6,9 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, CheckCircle, ArrowRight } from 'lucide-react';
 
 export default function RegisterForm() {
-  const router = useRouter();
   const [organizationName, setOrganizationName] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -53,7 +51,9 @@ export default function RegisterForm() {
       }
 
       if (data.user?.role === 'superadmin' && data.user?.status === 'active') {
-        router.push('/app');
+        // Registration establishes a new tenant session; clear any client
+        // state retained from a previous account before entering the app.
+        window.location.replace('/app');
         return;
       }
 

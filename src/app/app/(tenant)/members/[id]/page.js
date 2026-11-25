@@ -55,9 +55,9 @@ const EMPTY_EDIT = {
 
 export default function MemberDetailPage() {
   const { id } = useParams();
-  const { getMember, rememberMember } = useMembersData();
+  const { rememberMember } = useMembersData();
   const toast = useToast();
-  const [member, setMember] = useState(() => getMember(id));
+  const [member, setMember] = useState(null);
   const [memberFields, setMemberFields] = useState([]);
   const [memberDocuments, setMemberDocuments] = useState([]);
   const [documentConfigs, setDocumentConfigs] = useState([]);
@@ -67,7 +67,7 @@ export default function MemberDetailPage() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsError, setAccountsError] = useState('');
-  const [loading, setLoading] = useState(() => !getMember(id));
+  const [loading, setLoading] = useState(true);
   const [memberLoadError, setMemberLoadError] = useState('');
   const [activeTab, setActiveTab] = useState('Profile');
   const [editing, setEditing] = useState(false);
@@ -133,16 +133,12 @@ export default function MemberDetailPage() {
       : account));
   };
 
-  const fetchData = async ({ refreshMember = false } = {}) => {
+  const fetchData = async () => {
     const requestId = ++dataRequestId.current;
-    const cachedMember = refreshMember ? null : getMember(id);
-    if (cachedMember) {
-      setMember(cachedMember);
-      setLoading(false);
-      setMemberLoadError('');
-    } else {
-      setLoading(true);
-    }
+    // A client cache is not an authorization check. Always validate the
+    // member against the organization in the current server session.
+    setMember(null);
+    setLoading(true);
     void fetchAccounts(id);
     setMemberLoadError('');
     setAccountTypes([]);
@@ -150,26 +146,24 @@ export default function MemberDetailPage() {
     setNewAccount((current) => ({ ...current, account_type_id: '' }));
     try {
       const [memberRes, typesRes, fieldsRes, docsRes, docConfigsRes] = await Promise.all([
-        cachedMember ? Promise.resolve(null) : fetchWithAuth(`/api/members/${id}`, { cache: 'no-store' }),
+        fetchWithAuth(`/api/members/${id}`, { cache: 'no-store' }),
         fetchWithAuth('/api/account-types', { cache: 'no-store' }),
         fetchWithAuth('/api/member-field-configs', { cache: 'no-store' }),
         fetchWithAuth(`/api/member-documents?member_id=${id}`, { cache: 'no-store' }),
         fetchWithAuth('/api/member-document-configs', { cache: 'no-store' }),
       ]);
       if (requestId !== dataRequestId.current) return;
-      const memberJson = cachedMember
-        ? { success: true, data: cachedMember }
-        : await memberRes.json();
+      const memberJson = await memberRes.json();
       const typesJson = await typesRes.json();
       const fieldsJson = await fieldsRes.json();
       if (fieldsJson.success) setMemberFields(fieldsJson.data || []);
       const docsJson = await docsRes.json();
       const docConfigsJson = await docConfigsRes.json();
       if (!memberJson.success) {
-        setMemberLoadError(memberRes?._status === 404
+        setMemberLoadError(memberRes._status === 404
           ? 'Member not found or you do not have access to it.'
           : memberJson.error || 'Could not load this member. Please try again.');
-        if (!cachedMember) setMember(null);
+        setMember(null);
         return;
       }
       if (docsJson.success) setMemberDocuments(docsJson.data || []);
@@ -289,7 +283,7 @@ export default function MemberDetailPage() {
       if (!result.success) return toast.error(result.error || 'Upload failed');
       toast.success('Private document uploaded');
       setDocumentFile(null);
-      fetchData({ refreshMember: true });
+      fetchData();
     } catch { toast.error('Upload failed'); }
     finally { setUploadingDocument(false); }
   };
@@ -407,11 +401,11 @@ export default function MemberDetailPage() {
   };
 
   useApiRefresh(() => {
-    void fetchData({ refreshMember: true });
+    void fetchData();
     if (activeTab === 'Audit Trail') void fetchAuditLog();
   });
 
-  if (loading) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
+  if (loading || (member && member.id !== id)) return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
   if (!member) return <div className="p-6 text-center text-muted-foreground">
     <p>{memberLoadError || 'Member not found or you do not have access to it.'}</p>
     {memberLoadError && <button type="button" onClick={fetchData} className="mt-3 text-blue-600 underline">Try again</button>}

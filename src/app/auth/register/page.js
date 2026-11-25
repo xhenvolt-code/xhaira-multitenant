@@ -7,11 +7,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import styles from './register.module.css';
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [systemInitialized, setSystemInitialized] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -95,7 +93,9 @@ export default function RegisterPage() {
       }
 
       // Success - redirect to dashboard
-      router.push('/app/dashboard');
+      // Registration establishes a new tenant session; clear any client
+      // state retained from a previous account before entering the app.
+      window.location.replace('/app/dashboard');
     } catch (err) {
       setError('An unexpected error occurred');
       setSubmitting(false);
