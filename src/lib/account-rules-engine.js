@@ -19,6 +19,13 @@
  */
 
 import { query } from '@/lib/db.js';
+import { getOrganizationContext } from '@/lib/organization-context.js';
+
+function requireOrganizationId() {
+  const organizationId = getOrganizationContext();
+  if (!organizationId) throw new Error('Organization context is required to evaluate account rules');
+  return organizationId;
+}
 
 /**
  * Get all enabled rules for an account_type_id as a flat key→value map.
@@ -29,12 +36,13 @@ import { query } from '@/lib/db.js';
  */
 export async function getAccountTypeRules(accountTypeId) {
   if (!accountTypeId) return {};
+  const organizationId = requireOrganizationId();
 
   const result = await query(
     `SELECT rule_key, rule_value
      FROM account_type_rules
-     WHERE account_type_id = $1 AND is_enabled = TRUE`,
-    [accountTypeId]
+     WHERE account_type_id = $1 AND organization_id = $2 AND is_enabled = TRUE`,
+    [accountTypeId, organizationId]
   );
 
   const rules = {};
@@ -51,6 +59,7 @@ export async function getAccountTypeRules(accountTypeId) {
  * @returns {Promise<{ memberAccount: object, accountType: object, rules: object }>}
  */
 export async function getRulesForMemberAccount(memberAccountId) {
+  const organizationId = requireOrganizationId();
   const result = await query(
     `SELECT ma.*,
             at.id              AS at_id,
@@ -60,9 +69,10 @@ export async function getRulesForMemberAccount(memberAccountId) {
             at.minimum_balance AS at_min_balance,
             at.interest_rate   AS at_interest_rate
      FROM member_accounts ma
-     LEFT JOIN account_types at ON at.id = ma.account_type_id
-     WHERE ma.id = $1`,
-    [memberAccountId]
+     LEFT JOIN account_types at
+       ON at.id = ma.account_type_id AND at.organization_id = ma.organization_id
+     WHERE ma.id = $1 AND ma.organization_id = $2`,
+    [memberAccountId, organizationId]
   );
 
   if (result.rows.length === 0) {
@@ -95,6 +105,7 @@ export async function getRulesForMemberAccount(memberAccountId) {
  */
 export async function validateWithdrawal(memberAccountId, amount, currentBalance) {
   const { rules, accountType, memberAccount } = await getRulesForMemberAccount(memberAccountId);
+  const organizationId = requireOrganizationId();
 
   // ── Rule: withdrawal_allowed ─────────────────────────────────────────────
   const withdrawalAllowed = rules.withdrawal_allowed !== undefined
@@ -106,6 +117,24 @@ export async function validateWithdrawal(memberAccountId, amount, currentBalance
       allowed: false,
       reason:  `Withdrawals are not permitted for "${accountType.name}" accounts.`,
     };
+  }
+
+  // ── Rule: block_withdrawal_if_active_loan ────────────────────────────────
+  if (rules.block_withdrawal_if_active_loan === true) {
+    const activeLoan = await query(
+      `SELECT 1
+         FROM loans
+        WHERE member_id = $1 AND organization_id = $2
+          AND status IN ('PENDING', 'APPROVED', 'DISBURSED', 'ACTIVE')
+        LIMIT 1`,
+      [memberAccount.member_id, organizationId]
+    );
+    if (activeLoan.rows[0]) {
+      return {
+        allowed: false,
+        reason: 'Withdrawals are blocked for this account type while you have a pending or active loan.',
+      };
+    }
   }
 
   // ── Rule: requires_maturity ──────────────────────────────────────────────

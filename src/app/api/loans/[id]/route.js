@@ -13,7 +13,7 @@ export async function GET(request, { params }) {
 
     const { id } = await params;
 
-    const [loanResult, scheduleResult, guarantorResult] = await Promise.all([
+    const [loanResult, scheduleResult, guarantorResult, externalGuarantorResult] = await Promise.all([
       query(
         `SELECT l.*, m.full_name as member_name, m.membership_number,
            p.name as product_name, p.product_type,
@@ -38,6 +38,14 @@ export async function GET(request, { params }) {
          WHERE lg.loan_id = $1 AND lg.organization_id = $2 ORDER BY lg.created_at`,
         [id, auth.organizationId]
       ),
+      query(
+        `SELECT id, full_name, phone, physical_address, occupation,
+                relationship, guaranteed_amount, status, created_at
+           FROM loan_external_guarantors
+          WHERE loan_id = $1 AND organization_id = $2
+          ORDER BY created_at`,
+        [id, auth.organizationId]
+      ),
     ]);
 
     if (loanResult.rows.length === 0) {
@@ -50,6 +58,7 @@ export async function GET(request, { params }) {
         ...loanResult.rows[0],
         schedule: scheduleResult.rows,
         guarantors: guarantorResult.rows,
+        external_guarantors: externalGuarantorResult.rows,
       },
     });
     });

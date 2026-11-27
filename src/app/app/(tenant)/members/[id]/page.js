@@ -12,6 +12,7 @@ import { useMembersData } from '../members-data-context';
 import { useToast } from '@/components/ui/Toast';
 import { useApiRefresh } from '@/lib/use-api-refresh';
 import { useMarzpayPhoneVerification } from '@/lib/use-marzpay-phone-verification';
+import UgandaAddressInput from '@/components/members/UgandaAddressInput';
 import TransactionModeDialog from '@/components/transactions/TransactionModeDialog';
 import Link from 'next/link';
 
@@ -595,8 +596,11 @@ export default function MemberDetailPage() {
                       <input type="email" value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} className={inputClass} />
                     </div>
                     <div className="sm:col-span-2">
-                      <label className={labelClass}>Address</label>
-                      <input value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} className={inputClass} />
+                      <UgandaAddressInput
+                        id="member-profile-address"
+                        value={editForm.address}
+                        onChange={address => setEditForm(current => ({ ...current, address }))}
+                      />
                     </div>
                   </div>
                 </div>

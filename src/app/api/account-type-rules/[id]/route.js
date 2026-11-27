@@ -52,6 +52,9 @@ export async function PUT(request, { params }) {
       values.push(body.description);
     }
     if (body.is_enabled !== undefined) {
+      if (typeof body.is_enabled !== 'boolean') {
+        return NextResponse.json({ success: false, error: 'is_enabled must be true or false' }, { status: 400 });
+      }
       updates.push(`is_enabled = $${i++}`);
       values.push(body.is_enabled);
     }
@@ -61,12 +64,12 @@ export async function PUT(request, { params }) {
     }
 
     values.push(id, perm.auth.organizationId);
-    const result = await query(
+    const result = await runWithOrganizationContext(perm.auth.organizationId, () => query(
       `UPDATE account_type_rules SET ${updates.join(', ')}, updated_at = NOW()
        WHERE id = $${i} AND organization_id = $${i + 1}
        RETURNING *`,
       values
-    );
+    ));
     if (result.rows.length === 0) return NextResponse.json({ success: false, error: 'Rule not found' }, { status: 404 });
     return NextResponse.json({ success: true, data: result.rows[0] });
   } catch (error) {

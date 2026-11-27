@@ -9,6 +9,7 @@ const PRODUCT_TYPES = new Set([
 const REPAYMENT_CYCLES = new Set([
   'DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY',
 ]);
+const DURATION_UNITS = new Set(['DAYS', 'WEEKS', 'MONTHS', 'YEARS']);
 const PRODUCT_STORAGE_ERROR_CODES = new Set(['42P01', '42703']);
 
 function isOptionalFiniteNumber(value) {
@@ -72,7 +73,7 @@ export async function POST(request) {
     }
     const {
       name, description, product_type, price, currency,
-      interest_rate, duration, repayment_cycle,
+      interest_rate, duration, duration_unit, repayment_cycle,
       min_amount, max_amount, requires_approval, metadata, is_active,
     } = body;
 
@@ -92,6 +93,13 @@ export async function POST(request) {
     if (duration !== undefined && duration !== null && duration !== '' && !Number.isInteger(Number(duration))) {
       return NextResponse.json({ success: false, error: 'Duration must be a whole number of periods' }, { status: 400 });
     }
+    if (duration !== undefined && duration !== null && duration !== '' && Number(duration) < 1) {
+      return NextResponse.json({ success: false, error: 'Duration must be at least one period' }, { status: 400 });
+    }
+    const normalizedDurationUnit = String(duration_unit || 'MONTHS').toUpperCase();
+    if (!DURATION_UNITS.has(normalizedDurationUnit)) {
+      return NextResponse.json({ success: false, error: 'Duration unit must be DAYS, WEEKS, MONTHS, or YEARS' }, { status: 400 });
+    }
     if (repayment_cycle && !REPAYMENT_CYCLES.has(repayment_cycle)) {
       return NextResponse.json({ success: false, error: 'Invalid repayment cycle' }, { status: 400 });
     }
@@ -110,9 +118,9 @@ export async function POST(request) {
       const result = await query(
         `INSERT INTO products
            (organization_id, name, description, product_type, price, currency,
-            interest_rate, duration, repayment_cycle, min_amount, max_amount,
+            interest_rate, duration, duration_unit, repayment_cycle, min_amount, max_amount,
             requires_approval, is_active, metadata, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING *`,
         [
           organizationId,
@@ -123,6 +131,7 @@ export async function POST(request) {
           normalizedCurrency,
           interest_rate === '' ? null : interest_rate ?? null,
           duration === '' ? null : duration ?? null,
+          normalizedDurationUnit,
           repayment_cycle || null,
           min_amount === '' ? null : min_amount ?? null,
           max_amount === '' ? null : max_amount ?? null,

@@ -10,6 +10,13 @@
  */
 
 import { getPool } from '@/lib/db.js';
+import { getOrganizationContext } from '@/lib/organization-context.js';
+
+function requireOrganizationContext() {
+  const organizationId = getOrganizationContext();
+  if (!organizationId) throw new Error('Organization context is required to evaluate SACCO rules');
+  return organizationId;
+}
 
 // ─── Rule CRUD ───
 
@@ -18,10 +25,12 @@ import { getPool } from '@/lib/db.js';
  * @returns {Object|null} The rule_value JSONB object, or null if not found/inactive
  */
 export async function getRule(ruleType, ruleKey) {
+  const organizationId = requireOrganizationContext();
   const pool = getPool();
   const result = await pool.query(
-    `SELECT rule_value FROM sacco_rules WHERE rule_type = $1 AND rule_key = $2 AND is_active = true`,
-    [ruleType, ruleKey]
+    `SELECT rule_value FROM sacco_rules
+      WHERE organization_id = $1 AND rule_type = $2 AND rule_key = $3 AND is_active = true`,
+    [organizationId, ruleType, ruleKey]
   );
   return result.rows.length > 0 ? result.rows[0].rule_value : null;
 }
@@ -30,10 +39,12 @@ export async function getRule(ruleType, ruleKey) {
  * Get all rules of a given type
  */
 export async function getRulesByType(ruleType) {
+  const organizationId = requireOrganizationContext();
   const pool = getPool();
   const result = await pool.query(
-    `SELECT rule_key, rule_value, description FROM sacco_rules WHERE rule_type = $1 AND is_active = true ORDER BY rule_key`,
-    [ruleType]
+    `SELECT rule_key, rule_value, description FROM sacco_rules
+      WHERE organization_id = $1 AND rule_type = $2 AND is_active = true ORDER BY rule_key`,
+    [organizationId, ruleType]
   );
   return result.rows;
 }
@@ -42,9 +53,12 @@ export async function getRulesByType(ruleType) {
  * Get all active rules as a flat map: { "LOAN.max_loan_multiplier": {...}, ... }
  */
 export async function getAllRules() {
+  const organizationId = requireOrganizationContext();
   const pool = getPool();
   const result = await pool.query(
-    `SELECT id, rule_type, rule_key, rule_value, description, is_active, created_at, updated_at FROM sacco_rules ORDER BY rule_type, rule_key`
+    `SELECT id, rule_type, rule_key, rule_value, description, is_active, created_at, updated_at
+       FROM sacco_rules WHERE organization_id = $1 ORDER BY rule_type, rule_key`,
+    [organizationId]
   );
   return result.rows;
 }
@@ -53,16 +67,17 @@ export async function getAllRules() {
  * Set (upsert) a rule
  */
 export async function setRule(ruleType, ruleKey, ruleValue, description) {
+  const organizationId = requireOrganizationContext();
   const pool = getPool();
   const result = await pool.query(
-    `INSERT INTO sacco_rules (rule_type, rule_key, rule_value, description)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (rule_type, rule_key) DO UPDATE SET
+    `INSERT INTO sacco_rules (organization_id, rule_type, rule_key, rule_value, description)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (organization_id, rule_type, rule_key) DO UPDATE SET
        rule_value = EXCLUDED.rule_value,
        description = COALESCE(EXCLUDED.description, sacco_rules.description),
        updated_at = NOW()
      RETURNING *`,
-    [ruleType, ruleKey, JSON.stringify(ruleValue), description || null]
+    [organizationId, ruleType, ruleKey, JSON.stringify(ruleValue), description || null]
   );
   return result.rows[0];
 }
@@ -74,12 +89,16 @@ export async function setRule(ruleType, ruleKey, ruleValue, description) {
  * Returns { eligible: boolean, maxLoan: number, reasons: string[], checks: Object }
  */
 export async function checkLoanEligibility(memberId, requestedAmount) {
+  const organizationId = requireOrganizationContext();
   const pool = getPool();
   const checks = {};
   const reasons = [];
 
   // 1. Member must be active
-  const member = await pool.query(`SELECT id, status, created_at FROM members WHERE id = $1`, [memberId]);
+  const member = await pool.query(
+    `SELECT id, status, created_at FROM members WHERE id = $1 AND organization_id = $2`,
+    [memberId, organizationId]
+  );
   if (member.rows.length === 0) return { eligible: false, maxLoan: 0, reasons: ['Member not found'], checks };
   if (member.rows[0].status !== 'active') {
     reasons.push('Member is not active');
@@ -98,11 +117,13 @@ export async function checkLoanEligibility(memberId, requestedAmount) {
      ), 0) AS balance
      FROM ledger_entries le
      JOIN member_accounts ma ON le.member_account_id = ma.id
-     LEFT JOIN account_types at ON ma.account_type_id = at.id
-     WHERE ma.member_id = $1
+     LEFT JOIN account_types at
+       ON ma.account_type_id = at.id AND at.organization_id = ma.organization_id
+     WHERE ma.member_id = $1 AND ma.organization_id = $2
        AND (ma.account_type = 'fixed_deposit' OR at.code = 'FIXED_SAV')
-       AND ma.status = 'active'`,
-    [memberId]
+       AND ma.status = 'active'
+       AND le.organization_id = $2`,
+    [memberId, organizationId]
   );
   const fixedSavings = parseFloat(fixedBalance.rows[0].balance);
   checks.fixed_savings = fixedSavings;
@@ -114,7 +135,7 @@ export async function checkLoanEligibility(memberId, requestedAmount) {
 
   // 3. Max loan multiplier
   const multiplierRule = await getRule('LOAN', 'max_loan_multiplier');
-  const multiplier = multiplierRule?.multiplier || 3;
+  const multiplier = multiplierRule?.multiplier ?? 3;
   const maxLoan = fixedSavings * multiplier;
   checks.max_loan_multiplier = multiplier;
   checks.max_eligible_amount = maxLoan;
@@ -125,10 +146,12 @@ export async function checkLoanEligibility(memberId, requestedAmount) {
 
   // 4. Existing active loans check
   const maxLoansRule = await getRule('LOAN', 'max_active_loans');
-  const maxActiveLoans = maxLoansRule?.count || 2;
+  const maxActiveLoans = maxLoansRule?.count ?? 2;
   const activeLoans = await pool.query(
-    `SELECT COUNT(*) as count FROM loans WHERE member_id = $1 AND status IN ('PENDING', 'APPROVED', 'ACTIVE')`,
-    [memberId]
+    `SELECT COUNT(*) as count FROM loans
+      WHERE member_id = $1 AND organization_id = $2
+        AND status IN ('PENDING', 'APPROVED', 'ACTIVE')`,
+    [memberId, organizationId]
   );
   const activeCount = parseInt(activeLoans.rows[0].count);
   checks.active_loans = activeCount;
@@ -158,6 +181,7 @@ export async function checkLoanEligibility(memberId, requestedAmount) {
  */
 export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loanBorrowerId) {
   const pool = getPool();
+  const organizationId = requireOrganizationContext();
   const issues = [];
 
   // Cannot guarantee own loan
@@ -167,22 +191,36 @@ export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loa
   }
 
   // Must be active member
-  const member = await pool.query(`SELECT id, status, created_at, member_kind FROM members WHERE id = $1`, [guarantorMemberId]);
+  const member = await pool.query(
+    `SELECT id, status, created_at, member_kind FROM members
+      WHERE id = $1 AND organization_id = $2`,
+    [guarantorMemberId, organizationId]
+  );
   if (member.rows.length === 0) return { valid: false, issues: ['Guarantor not a registered member'] };
   if (member.rows[0].status !== 'active') {
     issues.push('Guarantor is not an active member');
   }
   if (member.rows[0].member_kind === 'group') {
     const policy = await pool.query(`SELECT config_key, config_value FROM sacco_configurations
-      WHERE config_key IN ('groups.requirement', 'groups.nature')`);
+      WHERE organization_id = $1 AND config_key IN ('groups.requirement', 'groups.nature')`,
+      [organizationId]);
     const values = Object.fromEntries(policy.rows.map((row) => [row.config_key, row.config_value]));
     if (values['groups.requirement'] === 'disabled' || values['groups.nature'] === 'sub_organization') {
       issues.push('Group entities cannot guarantee loans under this organization configuration');
     }
   } else {
-    const groupRequirement = await pool.query(`SELECT config_value FROM sacco_configurations WHERE config_key = 'groups.requirement'`);
-    if (groupRequirement.rows[0]?.config_value === 'required') {
-      const membership = await pool.query('SELECT 1 FROM member_group_links WHERE member_id = $1 LIMIT 1', [guarantorMemberId]);
+    const loanGuarantorRule = await getRule('LOAN', 'guarantors_required');
+    const memberScope = loanGuarantorRule?.member_scope || 'SAME_GROUP';
+    const groupRequirement = await pool.query(
+      `SELECT config_value FROM sacco_configurations
+        WHERE organization_id = $1 AND config_key = 'groups.requirement'`,
+      [organizationId]
+    );
+    if (memberScope === 'SAME_GROUP' && groupRequirement.rows[0]?.config_value === 'required') {
+      const membership = await pool.query(
+        'SELECT 1 FROM member_group_links WHERE member_id = $1 AND organization_id = $2 LIMIT 1',
+        [guarantorMemberId, organizationId]
+      );
       if (!membership.rows[0]) issues.push('Guarantor must belong to a group under this organization configuration');
     }
   }
@@ -206,14 +244,15 @@ export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loa
      ), 0) AS balance
      FROM ledger_entries le
      JOIN member_accounts ma ON le.member_account_id = ma.id
-     WHERE ma.member_id = $1 AND ma.status = 'active'`,
-    [guarantorMemberId]
+     WHERE ma.member_id = $1 AND ma.organization_id = $2 AND ma.status = 'active'
+       AND le.organization_id = $2`,
+    [guarantorMemberId, organizationId]
   );
   const totalSavings = parseFloat(savingsResult.rows[0].balance);
 
   // Max guarantee percentage of own savings
   const maxPctRule = await getRule('GUARANTOR', 'max_guarantee_percentage');
-  const maxPct = maxPctRule?.percentage || 100;
+  const maxPct = maxPctRule?.percentage ?? 100;
   const maxGuaranteeCapacity = totalSavings * (maxPct / 100);
 
   // Already guaranteed amounts
@@ -221,8 +260,10 @@ export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loa
     `SELECT COALESCE(SUM(lg.guaranteed_amount), 0) as total
      FROM loan_guarantors lg
      JOIN loans l ON lg.loan_id = l.id
-     WHERE lg.guarantor_member_id = $1 AND l.status IN ('PENDING', 'APPROVED', 'ACTIVE')`,
-    [guarantorMemberId]
+     WHERE lg.guarantor_member_id = $1
+       AND lg.organization_id = $2 AND l.organization_id = $2
+       AND l.status IN ('PENDING', 'APPROVED', 'ACTIVE')`,
+    [guarantorMemberId, organizationId]
   );
   const alreadyGuaranteed = parseFloat(existingGuarantees.rows[0].total);
   const availableCapacity = maxGuaranteeCapacity - alreadyGuaranteed;
@@ -252,6 +293,7 @@ export async function validateGuarantor(guarantorMemberId, guaranteedAmount, loa
  */
 export async function validateTransfer(senderMemberId, receiverMemberId, senderAccountId, amount) {
   const pool = getPool();
+  const organizationId = requireOrganizationContext();
   const issues = [];
 
   if (senderMemberId === receiverMemberId) {
@@ -269,10 +311,10 @@ export async function validateTransfer(senderMemberId, receiverMemberId, senderA
   const acct = await pool.query(
     `SELECT ma.id, ma.account_type, at.allows_withdrawal, at.minimum_balance, at.name as type_name
      FROM member_accounts ma
-     LEFT JOIN account_types at ON ma.account_type_id = at.id
-     WHERE ma.id = $1
-       AND ma.organization_id = public.current_organization_id()`,
-    [senderAccountId]
+     LEFT JOIN account_types at
+       ON ma.account_type_id = at.id AND at.organization_id = ma.organization_id
+     WHERE ma.id = $1 AND ma.organization_id = $2 AND ma.member_id = $3`,
+    [senderAccountId, organizationId, senderMemberId]
   );
   if (acct.rows.length === 0) {
     issues.push('Sender account not found');
@@ -303,13 +345,13 @@ export async function validateTransfer(senderMemberId, receiverMemberId, senderA
      JOIN member_accounts ma ON ma.id = le.member_account_id
        AND ma.organization_id = t.organization_id
      WHERE t.transaction_type = 'transfer'
-       AND t.organization_id = public.current_organization_id()
-       AND le.organization_id = public.current_organization_id()
-       AND ma.organization_id = public.current_organization_id()
+       AND t.organization_id = $2
+       AND le.organization_id = $2
+       AND ma.organization_id = $2
        AND ma.member_id = $1
        AND le.entry_type = 'DEBIT'
        AND t.created_at >= CURRENT_DATE`,
-    [senderMemberId]
+    [senderMemberId, organizationId]
   );
   if (parseInt(todayTransfers.rows[0].count) >= maxDaily) {
     issues.push(`Daily transfer limit reached (${maxDaily})`);

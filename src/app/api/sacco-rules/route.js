@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions.js';
 import { getAllRules, setRule } from '@/lib/rule-engine.js';
+import { runWithOrganizationContext } from '@/lib/organization-context.js';
 
 // GET /api/sacco-rules — List all SACCO rules
 export async function GET(request) {
@@ -8,7 +9,10 @@ export async function GET(request) {
     const perm = await requirePermission(request, 'finance.view');
     if (perm instanceof NextResponse) return perm;
 
-    const rules = await getAllRules();
+    const rules = await runWithOrganizationContext(
+      perm.auth.organizationId,
+      () => getAllRules()
+    );
     return NextResponse.json({ success: true, data: rules });
   } catch (error) {
     console.error('[SACCO Rules] GET error:', error.message);
@@ -25,10 +29,12 @@ export async function POST(request) {
     const body = await request.json();
     const { rule_type, rule_key, rule_value, description } = body;
 
-    if (!rule_type || !rule_key || !rule_value) {
+    if (typeof rule_type !== 'string' || typeof rule_key !== 'string' ||
+        rule_key.length > 100 || !/^[a-z0-9_]+$/.test(rule_key) ||
+        !rule_value || typeof rule_value !== 'object' || Array.isArray(rule_value)) {
       return NextResponse.json({
         success: false,
-        error: 'rule_type, rule_key, and rule_value are required',
+        error: 'A valid rule_type, rule_key, and rule_value are required',
       }, { status: 400 });
     }
 
@@ -40,7 +46,14 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    const rule = await setRule(rule_type, rule_key, rule_value, description);
+    if (description !== undefined && (typeof description !== 'string' || description.length > 1000)) {
+      return NextResponse.json({ success: false, error: 'description must be 1000 characters or fewer' }, { status: 400 });
+    }
+
+    const rule = await runWithOrganizationContext(
+      perm.auth.organizationId,
+      () => setRule(rule_type, rule_key, rule_value, description)
+    );
     return NextResponse.json({ success: true, data: rule }, { status: 201 });
   } catch (error) {
     console.error('[SACCO Rules] POST error:', error.message);

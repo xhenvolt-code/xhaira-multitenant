@@ -12,8 +12,9 @@ export const PRODUCT_TYPES = {
     color: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
     icon: 'Banknote',
     fields: {
-      interest_rate: { required: true, label: 'Interest Rate (%)', type: 'number', step: '0.01' },
-      duration_months: { required: true, label: 'Duration (months)', type: 'number' },
+      interest_rate: { required: true, label: 'Annual Simple Interest Rate (%)', type: 'number', step: '0.01' },
+      duration_months: { required: true, label: 'Duration', type: 'number' },
+      duration_unit: { required: true, label: 'Duration Unit', type: 'select', options: ['DAYS', 'WEEKS', 'MONTHS', 'YEARS'] },
       repayment_cycle: { required: true, label: 'Repayment Cycle', type: 'select', options: ['DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY'] },
       min_amount: { required: true, label: 'Minimum Amount', type: 'number' },
       max_amount: { required: true, label: 'Maximum Amount', type: 'number' },

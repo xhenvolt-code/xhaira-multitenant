@@ -79,21 +79,35 @@ export async function POST(request) {
     return await runWithOrganizationContext(perm.auth.organizationId, async () => {
 
     const body = await request.json();
-    const { member_id, product_id, member_account_id, principal, guarantors } = body;
+    const {
+      member_id,
+      product_id,
+      member_account_id,
+      principal,
+      guarantors,
+      external_guarantors,
+    } = body;
 
     if (!member_id || !principal) {
       return NextResponse.json({ success: false, error: 'member_id and principal are required' }, { status: 400 });
     }
-    if (parseFloat(principal) <= 0) {
+    if (!Number.isFinite(Number(principal)) || Number(principal) <= 0) {
       return NextResponse.json({ success: false, error: 'Principal must be positive' }, { status: 400 });
+    }
+    if (guarantors !== undefined && !Array.isArray(guarantors)) {
+      return NextResponse.json({ success: false, error: 'guarantors must be an array' }, { status: 400 });
+    }
+    if (external_guarantors !== undefined && !Array.isArray(external_guarantors)) {
+      return NextResponse.json({ success: false, error: 'external_guarantors must be an array' }, { status: 400 });
     }
 
     const result = await applyForLoan({
       memberId: member_id,
       productId: product_id || null,
       memberAccountId: member_account_id || null,
-      principal: parseFloat(principal),
+      principal: Number(principal),
       guarantors: guarantors || [],
+      externalGuarantors: external_guarantors || [],
       userId: perm.auth.userId,
     });
 

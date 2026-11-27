@@ -141,7 +141,9 @@ export default function LoanDetailPage() {
             <h1 className="text-2xl font-bold text-foreground">
               Loan — <Link href={`/app/members/${loan.member_id}`} className="hover:text-blue-600">{loan.member_name}</Link>
             </h1>
-            <p className="text-sm text-muted-foreground">{loan.product_name || 'Default Terms'} &middot; {loan.interest_rate}% &middot; {loan.duration} months</p>
+            <p className="text-sm text-muted-foreground">
+              {loan.product_name || 'Organization defaults'} &middot; {loan.interest_rate}% p.a. &middot; {loan.duration} {String(loan.duration_unit || 'MONTHS').toLowerCase()}
+            </p>
           </div>
         </div>
         <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_STYLES[loan.status] || ''}`}>{loan.status}</span>
@@ -226,6 +228,34 @@ export default function LoanDetailPage() {
                 <div className="text-right">
                   <span className="font-medium">{fmtCurrency(g.guaranteed_amount)}</span>
                   <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${STATUS_STYLES[g.status] || 'bg-gray-100 text-gray-600'}`}>{g.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {loan.external_guarantors && loan.external_guarantors.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-5">
+          <h3 className="font-semibold text-foreground mb-3">Outside Guarantors ({loan.external_guarantors.length})</h3>
+          <div className="space-y-3">
+            {loan.external_guarantors.map(guarantor => (
+              <div key={guarantor.id} className="rounded-lg border border-border bg-muted/20 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-foreground">{guarantor.full_name || 'Outside guarantor'}</p>
+                    {guarantor.phone && <p className="text-xs text-muted-foreground">{guarantor.phone}</p>}
+                  </div>
+                  <div className="text-right">
+                    <p className="font-medium">{fmtCurrency(guarantor.guaranteed_amount)}</p>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLES[guarantor.status] || 'bg-gray-100 text-gray-600'}`}>
+                      {guarantor.status}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                  {guarantor.physical_address && <p>Address: {guarantor.physical_address}</p>}
+                  {guarantor.occupation && <p>Occupation: {guarantor.occupation}</p>}
+                  {guarantor.relationship && <p>Relationship: {guarantor.relationship}</p>}
                 </div>
               </div>
             ))}

@@ -5,6 +5,10 @@ import { Banknote, Plus, Search, Clock, CheckCircle2, XCircle, AlertTriangle } f
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import Link from 'next/link';
+import {
+  EXTERNAL_GUARANTOR_FIELDS,
+  EXTERNAL_GUARANTOR_FIELD_MAX_LENGTH,
+} from '@/lib/loan-guarantor-rules.js';
 
 const STATUS_STYLES = {
   PENDING: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
@@ -45,7 +49,13 @@ export default function LoansPage() {
   const [guarantorSearchLoading, setGuarantorSearchLoading] = useState(false);
   const [guarantorSearchError, setGuarantorSearchError] = useState('');
   const [requiredGuarantors, setRequiredGuarantors] = useState(0);
+  const [guarantorRequirements, setGuarantorRequirements] = useState({
+    member_count: 0,
+    external_count: 0,
+    external_required_fields: [],
+  });
   const [selectedGuarantors, setSelectedGuarantors] = useState([]);
+  const [selectedExternalGuarantors, setSelectedExternalGuarantors] = useState([]);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
 
@@ -156,6 +166,8 @@ export default function LoansPage() {
       setGuarantorSearchLoading(false);
       setGuarantorSearchError('');
       setRequiredGuarantors(0);
+      setGuarantorRequirements({ member_count: 0, external_count: 0, external_required_fields: [] });
+      setSelectedExternalGuarantors([]);
       return;
     }
 
@@ -170,7 +182,16 @@ export default function LoansPage() {
           signal: controller.signal,
         });
         if (!result.success) throw new Error(result.error || 'Could not search group members.');
-        setRequiredGuarantors(result.requiredCount || 0);
+        const requirements = result.requirements || {
+          member_count: result.requiredCount || 0,
+          external_count: 0,
+          external_required_fields: [],
+        };
+        setRequiredGuarantors(requirements.member_count || 0);
+        setGuarantorRequirements(requirements);
+        setSelectedExternalGuarantors(current => current.length === requirements.external_count
+          ? current
+          : Array.from({ length: requirements.external_count }, (_, index) => current[index] || {}));
         const selectedIds = new Set(selectedGuarantors.map(item => item.id));
         setGuarantorCandidates((result.data || []).filter(member => !selectedIds.has(member.id)));
       } catch (error) {
@@ -199,6 +220,8 @@ export default function LoansPage() {
     setSelectedGuarantors([]);
     setGuarantorCandidates([]);
     setRequiredGuarantors(0);
+    setGuarantorRequirements({ member_count: 0, external_count: 0, external_required_fields: [] });
+    setSelectedExternalGuarantors([]);
     setGuarantorSearchError('');
   };
 
@@ -247,6 +270,10 @@ export default function LoansPage() {
       toast.error(`Select at least ${requiredGuarantors} group member${requiredGuarantors === 1 ? '' : 's'} as guarantor${requiredGuarantors === 1 ? '' : 's'}.`);
       return;
     }
+    if (selectedExternalGuarantors.length < guarantorRequirements.external_count) {
+      toast.error(`Enter details for at least ${guarantorRequirements.external_count} outside guarantor${guarantorRequirements.external_count === 1 ? '' : 's'}.`);
+      return;
+    }
     if (selectedGuarantors.some(guarantor => !Number.isFinite(Number(guarantor.guaranteed_amount)) || Number(guarantor.guaranteed_amount) <= 0)) {
       toast.error('Enter a positive guaranteed amount for each guarantor.');
       return;
@@ -262,6 +289,10 @@ export default function LoansPage() {
             guarantor_member_id: guarantor.id,
             guaranteed_amount: Number(guarantor.guaranteed_amount),
           })),
+          external_guarantors: selectedExternalGuarantors.map(guarantor => ({
+            ...guarantor,
+            guaranteed_amount: Number(guarantor.guaranteed_amount),
+          })),
         }),
       });
       const json = await res.json();
@@ -272,7 +303,9 @@ export default function LoansPage() {
         setMemberSearch('');
         setGuarantorSearch('');
         setSelectedGuarantors([]);
+        setSelectedExternalGuarantors([]);
         setRequiredGuarantors(0);
+        setGuarantorRequirements({ member_count: 0, external_count: 0, external_required_fields: [] });
         fetchLoans();
       } else {
         toast.error(json.error || 'Failed to create loan');
@@ -375,6 +408,8 @@ export default function LoansPage() {
                     setGuarantorCandidates([]);
                     setSelectedGuarantors([]);
                     setRequiredGuarantors(0);
+                    setGuarantorRequirements({ member_count: 0, external_count: 0, external_required_fields: [] });
+                    setSelectedExternalGuarantors([]);
                   }}
                   onKeyDown={handleMemberSearchKeyDown}
                   placeholder="Type a member name or number..."
@@ -408,9 +443,11 @@ export default function LoansPage() {
             <div>
               <label className="block text-xs font-medium text-muted-foreground mb-1">Loan Product</label>
               <select value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))} className={inputClass}>
-                <option value="">Default terms (10% / 12mo)</option>
+                <option value="">Organization default loan terms</option>
                 {products.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} — {p.interest_rate}% / {p.duration}mo</option>
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {p.interest_rate}% p.a. / {p.duration} {String(p.duration_unit || 'MONTHS').toLowerCase()}
+                  </option>
                 ))}
               </select>
             </div>
@@ -450,18 +487,19 @@ export default function LoansPage() {
           </div>
           <section className="space-y-3 rounded-lg border border-border p-4" aria-labelledby="loan-guarantors-heading">
             <div>
-              <h3 id="loan-guarantors-heading" className="text-sm font-semibold">Group guarantors</h3>
+              <h3 id="loan-guarantors-heading" className="text-sm font-semibold">Member guarantors</h3>
               <p className="mt-1 text-xs text-muted-foreground">
                 {requiredGuarantors > 0
-                  ? `Select at least ${requiredGuarantors} active group member${requiredGuarantors === 1 ? '' : 's'} as guarantor${requiredGuarantors === 1 ? '' : 's'}.`
-                  : 'Guarantors are optional. Search for active members of the applicant’s group.'}
+                  ? `Select at least ${requiredGuarantors} active individual member${requiredGuarantors === 1 ? '' : 's'} as guarantor${requiredGuarantors === 1 ? '' : 's'}.`
+                  : 'Member guarantors are optional under the current policy.'}
                 {requiredGuarantors > 0 && ` ${selectedGuarantors.length} of ${requiredGuarantors} required selected.`}
+                {guarantorRequirements.member_scope === 'SAME_GROUP' && ' They must belong to the applicant’s group.'}
               </p>
             </div>
             {!form.member_id ? (
               <p className="text-sm text-muted-foreground">Select the loan applicant first to find their group members.</p>
             ) : <>
-              <label htmlFor="loan-guarantor-search" className="sr-only">Search group members to add as guarantors</label>
+              <label htmlFor="loan-guarantor-search" className="sr-only">Search eligible members to add as guarantors</label>
               <input
                 id="loan-guarantor-search"
                 type="search"
@@ -473,7 +511,9 @@ export default function LoansPage() {
                   setGuarantorSearchError('');
                   setGuarantorCandidates([]);
                 }}
-                placeholder="Search applicant’s group by name or member number..."
+                placeholder={guarantorRequirements.member_scope === 'SAME_GROUP'
+                  ? 'Search applicant’s group by name or member number...'
+                  : 'Search organization members by name or member number...'}
                 className={inputClass}
               />
               {guarantorSearchLoading && <p className="text-xs text-muted-foreground">Searching group members…</p>}
@@ -491,7 +531,7 @@ export default function LoansPage() {
                 </ul>
               )}
               {!guarantorSearchLoading && !guarantorSearchError && guarantorSearch.trim().length >= 2 && guarantorCandidates.length === 0 && (
-                <p className="text-xs text-muted-foreground">No matching active members found in the applicant’s group.</p>
+                <p className="text-xs text-muted-foreground">No matching active eligible members found.</p>
               )}
               {selectedGuarantors.length > 0 && (
                 <ul className="space-y-2">
@@ -524,6 +564,57 @@ export default function LoansPage() {
               )}
             </>}
           </section>
+          {form.member_id && guarantorRequirements.external_count > 0 && (
+            <section className="space-y-3 rounded-lg border border-border p-4" aria-labelledby="loan-external-guarantors-heading">
+              <div>
+                <h3 id="loan-external-guarantors-heading" className="text-sm font-semibold">Outside guarantors</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Enter at least {guarantorRequirements.external_count} outside guarantor
+                  {guarantorRequirements.external_count === 1 ? '' : 's'}.
+                  Required details are configured in the organization&apos;s loan rules.
+                </p>
+              </div>
+              {selectedExternalGuarantors.map((guarantor, index) => (
+                <fieldset key={index} className="space-y-3 rounded border border-border p-3">
+                  <legend className="px-1 text-sm font-medium">Outside guarantor {index + 1}</legend>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {Object.entries(EXTERNAL_GUARANTOR_FIELDS).map(([field, label]) => {
+                      const required = guarantorRequirements.external_required_fields.includes(field);
+                      return (
+                        <label key={field} className="text-xs text-muted-foreground">
+                          {label}{required ? ' *' : ''}
+                          <input
+                            type={field === 'phone' ? 'tel' : 'text'}
+                            required={required}
+                            maxLength={EXTERNAL_GUARANTOR_FIELD_MAX_LENGTH[field]}
+                            value={guarantor[field] || ''}
+                            onChange={event => setSelectedExternalGuarantors(current => current.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, [field]: event.target.value } : item
+                            ))}
+                            className={`${inputClass} mt-1`}
+                          />
+                        </label>
+                      );
+                    })}
+                    <label className="text-xs text-muted-foreground">
+                      Guaranteed amount (UGX) *
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        required
+                        value={guarantor.guaranteed_amount || ''}
+                        onChange={event => setSelectedExternalGuarantors(current => current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, guaranteed_amount: event.target.value } : item
+                        ))}
+                        className={`${inputClass} mt-1`}
+                      />
+                    </label>
+                  </div>
+                </fieldset>
+              ))}
+            </section>
+          )}
           <button type="submit" disabled={saving}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition">
             {saving ? 'Submitting...' : 'Submit Application'}
@@ -576,7 +667,7 @@ export default function LoansPage() {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">
                         {l.product_name || 'Default'}<br />
-                        {l.interest_rate}% / {l.duration}mo
+                        {l.interest_rate}% p.a. / {l.duration} {String(l.duration_unit || 'MONTHS').toLowerCase()}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">{fmtCurrency(l.principal)}</td>
                       <td className="px-4 py-3 text-right">{fmtCurrency(l.total_payable)}</td>

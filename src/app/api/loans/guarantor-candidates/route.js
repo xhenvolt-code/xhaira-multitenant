@@ -3,6 +3,7 @@ import { query } from '@/lib/db.js';
 import { getRule } from '@/lib/rule-engine.js';
 import { requirePermission } from '@/lib/permissions.js';
 import { runWithOrganizationContext } from '@/lib/organization-context.js';
+import { resolveGuarantorRequirements } from '@/lib/loan-guarantor-rules.js';
 
 const MAX_RESULTS = 15;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,24 +40,14 @@ export async function GET(request) {
         return NextResponse.json({ success: false, error: 'Loan applicant was not found or is inactive.' }, { status: 404 });
       }
 
-      const requiredCount = Number(guarantorRule?.count) || 0;
+      const requirements = resolveGuarantorRequirements(guarantorRule);
+      const requiredCount = requirements.member_count;
       if (search.length < 2) {
-        return NextResponse.json({ success: true, data: [], requiredCount });
+        return NextResponse.json({ success: true, data: [], requiredCount, requirements });
       }
 
-      const result = await query(
-        `SELECT m.id, m.full_name, m.membership_number, m.phone
-           FROM members m
-          WHERE m.status = 'active'
-            AND m.organization_id = $3
-            AND m.member_kind = 'individual'
-            AND m.id <> $2
-            AND (
-              lower(m.full_name) LIKE $1 ESCAPE '\\'
-              OR lower(m.membership_number) LIKE $1 ESCAPE '\\'
-              OR lower(m.phone) LIKE $1 ESCAPE '\\'
-            )
-            AND EXISTS (
+      const membershipFilter = requirements.member_scope === 'SAME_GROUP'
+        ? `AND EXISTS (
               SELECT 1
                 FROM member_group_links candidate_link
                WHERE candidate_link.member_id = m.id
@@ -72,13 +63,27 @@ export async function GET(request) {
                     WHERE applicant_group.group_member_id = $2
                       AND applicant_group.organization_id = $3
                  )
+            )`
+        : '';
+      const result = await query(
+        `SELECT m.id, m.full_name, m.membership_number, m.phone
+           FROM members m
+          WHERE m.status = 'active'
+            AND m.organization_id = $3
+            AND m.member_kind = 'individual'
+            AND m.id <> $2
+            AND (
+              lower(m.full_name) LIKE $1 ESCAPE '\\'
+              OR lower(m.membership_number) LIKE $1 ESCAPE '\\'
+              OR lower(m.phone) LIKE $1 ESCAPE '\\'
             )
+            ${membershipFilter}
           ORDER BY lower(m.full_name), m.id
           LIMIT ${MAX_RESULTS}`,
         [escapeLikePrefix(search.toLowerCase()), memberId, permission.auth.organizationId]
       );
 
-      return NextResponse.json({ success: true, data: result.rows, requiredCount });
+      return NextResponse.json({ success: true, data: result.rows, requiredCount, requirements });
     });
   } catch (error) {
     console.error('[Loan Guarantor Candidates] GET error:', error.message);

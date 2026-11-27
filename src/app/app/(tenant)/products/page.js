@@ -23,7 +23,7 @@ export default function ProductsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [form, setForm] = useState({
     name: '', description: '', version: '', status: 'active', product_type: 'SERVICE',
-    interest_rate: '', duration_months: '', repayment_cycle: '', min_amount: '', max_amount: '',
+    interest_rate: '', duration_months: '', duration_unit: 'MONTHS', repayment_cycle: '', min_amount: '', max_amount: '',
     requires_approval: false, upfront_amount: '', return_rate: '',
     billing_frequency: '', currency: 'UGX', price: '',
   });
@@ -82,6 +82,7 @@ export default function ProductsPage() {
           product_type: body.product_type,
           interest_rate: body.interest_rate,
           duration: body.duration_months,
+          duration_unit: body.duration_unit,
           repayment_cycle: body.repayment_cycle,
           min_amount: body.min_amount,
           max_amount: body.max_amount,
@@ -116,7 +117,7 @@ export default function ProductsPage() {
 
   const resetForm = () => setForm({
     name: '', description: '', version: '', status: 'active', product_type: 'SERVICE',
-    interest_rate: '', duration_months: '', repayment_cycle: '', min_amount: '', max_amount: '',
+    interest_rate: '', duration_months: '', duration_unit: 'MONTHS', repayment_cycle: '', min_amount: '', max_amount: '',
     requires_approval: false, upfront_amount: '', return_rate: '',
     billing_frequency: '', currency: 'UGX', price: '',
   });
@@ -165,7 +166,7 @@ export default function ProductsPage() {
                 </div>
                 {product.description && <p className="text-sm text-muted-foreground mt-1">{product.description}</p>}
                 <div className="text-xs text-muted-foreground mt-3 space-y-1">
-                  <p>Interest: {product.interest_rate}% · Duration: {product.duration} months</p>
+                  <p>Interest: {product.interest_rate}% p.a. · Duration: {product.duration} {String(product.duration_unit || 'MONTHS').toLowerCase()}</p>
                   <p>Repayment: {product.repayment_cycle || 'Not specified'}</p>
                   <p>Range: {formatAmount(product.min_amount, product.currency)} – {formatAmount(product.max_amount, product.currency)}</p>
                 </div>
@@ -369,7 +370,7 @@ export default function ProductsPage() {
                     <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-medium text-foreground">{formatAmount(product.price, product.currency)}</span></div>
                   )}
                   {product.duration_months && (
-                    <div className="flex justify-between"><span className="text-muted-foreground">Duration</span><span className="font-medium text-foreground">{product.duration_months} months</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Duration</span><span className="font-medium text-foreground">{product.duration_months} {String(product.duration_unit || 'months').toLowerCase()}</span></div>
                   )}
                   {(product.min_amount || product.max_amount) && (
                     <div className="flex justify-between"><span className="text-muted-foreground">Range</span>

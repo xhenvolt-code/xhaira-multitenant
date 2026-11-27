@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchWithAuth } from '@/lib/fetch-client';
 import { useToast } from '@/components/ui/Toast';
 import { useMarzpayPhoneVerification } from '@/lib/use-marzpay-phone-verification';
+import UgandaAddressInput from '@/components/members/UgandaAddressInput';
 
 const inputClass = 'w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 const CORE = new Set(['first_name', 'last_name']);
@@ -81,6 +82,17 @@ export default function MemberRegistrationForm({ memberKind = 'individual', onDo
   };
 
   const renderField = (field) => {
+    if (field.field_name === 'address') {
+      return <div key={field.field_name} className="sm:col-span-2 lg:col-span-3">
+        <UgandaAddressInput
+          id="member-address"
+          value={form.address || ''}
+          required={field.is_required}
+          onChange={address => setForm(previous => ({ ...previous, address }))}
+        />
+      </div>;
+    }
+
     const type = field.field_type === 'select' ? 'select' : field.field_type === 'date' ? 'date' :
       field.field_type === 'email' ? 'email' : field.field_type === 'number' ? 'number' :
       field.field_type === 'phone' ? 'tel' : 'text';

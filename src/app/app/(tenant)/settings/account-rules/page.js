@@ -31,6 +31,7 @@ const RULE_KEYS = [
   { key: 'interest_cycle',       label: 'Interest Cycle',     type: 'select',  options: ['MONTHLY','QUARTERLY','ANNUALLY'], hint: 'How often interest is applied' },
   { key: 'interest_enabled',     label: 'Interest Enabled',   type: 'boolean', hint: 'Toggle interest calculation on/off' },
   { key: 'withdrawal_allowed',   label: 'Withdrawal Allowed', type: 'boolean', hint: 'Allow members to withdraw from this account type' },
+  { key: 'block_withdrawal_if_active_loan', label: 'Block Withdrawal With Active Loan', type: 'boolean', hint: 'Block withdrawals from this account type while a member has a pending, approved, disbursed, or active loan' },
   { key: 'requires_maturity',    label: 'Requires Maturity',  type: 'boolean', hint: 'Block withdrawals until maturity period elapses' },
   { key: 'maturity_period_days', label: 'Maturity (days)',    type: 'number',  hint: 'Number of days from open date before withdrawal allowed' },
   { key: 'loan_eligible',        label: 'Loan Eligible',      type: 'boolean', hint: 'Balance counts toward loan eligibility multiplier' },
